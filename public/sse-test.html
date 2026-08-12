@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>SSE Test</title>
+<style>body{font-family:monospace;padding:20px;background:#111;color:#0f0}.ok{color:#0f0}.err{color:red}.info{color:#ff0}</style>
+</head><body>
+<h2>SSE 诊断工具</h2>
+<div id="out"></div>
+<script>
+const out = document.getElementById('out');
+function log(msg, cls) { out.innerHTML += `<div class="${cls||''}">${msg}</div>`; }
+
+(async () => {
+  log('1. 测试 ping-sse...', 'info');
+  try {
+    const r1 = await fetch('/api/ping-sse');
+    const reader1 = r1.body.getReader();
+    const dec = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {done, value} = await reader1.read();
+      if (done) break;
+      buffer += dec.decode(value, {stream: true});
+    }
+    buffer += dec.decode();
+    log('ping-sse result: ' + buffer.substring(0, 500).replace(/\n/g, '<br>'), 'ok');
+  } catch(e) { log('ping-sse ERROR: ' + e.message, 'err'); }
+
+  log('---', '');
+  log('2. 测试 test-chat-sse...', 'info');
+  try {
+    const r2 = await fetch('/api/test-chat-sse');
+    const reader2 = r2.body.getReader();
+    const dec2 = new TextDecoder();
+    let buffer2 = '';
+    while (true) {
+      const {done, value} = await reader2.read();
+      if (done) break;
+      buffer2 += dec2.decode(value, {stream: true});
+    }
+    buffer2 += dec2.decode();
+    log('test-chat-sse result: ' + buffer2.substring(0, 500).replace(/\n/g, '<br>'), 'ok');
+  } catch(e) { log('test-chat-sse ERROR: ' + e.message, 'err'); }
+
+  log('---', '');
+  log('3. 测试真正的 chat/send...', 'info');
+  const token = localStorage.getItem('auth_token');
+  if (!token) { log('未登录，跳过', 'err'); return; }
+  log('Token: ' + token.substring(0, 20) + '...', 'info');
+
+  try {
+    const r3 = await fetch('/api/chat/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({
+        providerId: 'deepseek',
+        modelId: 'deepseek-chat',
+        messages: [{ role: 'user', content: '1+1=? 一个词回答' }]
+      })
+    });
+    log('HTTP status: ' + r3.status + ' ' + r3.statusText, r3.ok ? 'ok' : 'err');
+    log('Content-Type: ' + r3.headers.get('Content-Type'), 'info');
+    log('Content-Encoding: ' + r3.headers.get('Content-Encoding') || 'none', 'info');
+
+    const reader3 = r3.body.getReader();
+    const dec3 = new TextDecoder();
+    let buffer3 = '';
+    let received = false;
+    const start = Date.now();
+    while (true) {
+      const {done, value} = await reader3.read();
+      if (done) break;
+      received = true;
+      buffer3 += dec3.decode(value, {stream: true});
+    }
+    buffer3 += dec3.decode();
+    const elapsed = Date.now() - start;
+    log(`耗时: ${elapsed}ms, 收到数据: ${received}`, 'info');
+    log('chat 结果: ' + buffer3.substring(0, 1000).replace(/\n/g, '<br>'), buffer3.includes('text-delta') ? 'ok' : 'err');
+  } catch(e) { log('chat ERROR: ' + e.message, 'err'); }
+})();
+</script>
+</body></html>
