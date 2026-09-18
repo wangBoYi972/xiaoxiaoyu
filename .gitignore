@@ -74,6 +74,9 @@ nul
 *.bak
 *.bak2
 
+# 打包内置的发件邮箱（含 SMTP 授权码，绝不入库；由 CI secrets 或本地脚本注入）
+smtp-preset.local.ts
+
 # 例外：打包 extraResources 需要的 models 元数据
 !resources/models/
 !resources/models/**

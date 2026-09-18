@@ -25,6 +25,27 @@ jobs:
       - name: 安装依赖
         run: npm install --no-audit --no-fund --legacy-peer-deps
 
+      # 分发包内置发件邮箱：别人装完本机没有 SMTP，注册会卡在"发件邮箱未配置"。
+      # 授权码只存在仓库 Secrets 里（加密），不会出现在代码和构建日志中。
+      # 没配置这几个 secret 时生成空值 → 打包照常，只是不含内置邮箱。
+      - name: 注入内置发件邮箱
+        shell: bash
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: |
+          cat > src/main/utils/smtp-preset.local.ts <<'EOF'
+          export const SMTP_PRESET = {
+            host: '$SMTP_HOST',
+            port: '$SMTP_PORT',
+            user: '$SMTP_USER',
+            pass: '$SMTP_PASS',
+          };
+          EOF
+          echo "已注入内置发件邮箱配置"
+
       - name: 构建渲染层
         run: npm run build:renderer
 
@@ -36,8 +57,10 @@ jobs:
         run: npx electron-builder --win --x64
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          # 不配这个，app-builder 会去 GitHub 拉 winCodeSign，国内/偶发会卡死
-          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          # 注意：这里**不要**设 ELECTRON_BUILDER_BINARIES_MIRROR。
+          # 那个 npmmirror 镜像是给国内本机打包用的；GitHub Actions 在海外，
+          # 走 npmmirror 反而慢到超时（v3.1.0 首次构建就是卡死在这一步），
+          # 让它用默认的 GitHub 源下载即可。
 
       - name: 生成校验值
         shell: bash
