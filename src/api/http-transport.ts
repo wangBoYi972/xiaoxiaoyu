@@ -5,7 +5,10 @@ import type {
   ApiTransport, StreamChunk, Conversation, Message,
   ProviderConfig, ProviderSaveInput, FileData, FileFilter,
   SkillItem, UpdateInfo, UpdateProgress, Announcement,
+  AgentConfirmRequest, AuthResult, MailPurpose, SmtpStatus, WorkspaceTransport,
+  OpenedWorkspace,
 } from './transport';
+import type { FileNode } from '../renderer/stores/workspace-store';
 
 export class HttpTransport implements ApiTransport {
   private baseUrl: string;
@@ -54,45 +57,117 @@ export class HttpTransport implements ApiTransport {
     return res.json();
   }
 
-  // ========== Auth (extra, not in IPC) ==========
-  async login(username: string, password: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      const res = await fetch(`${this.baseUrl}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await res.json();
-      if (res.ok && data.token) {
-        this.setToken(data.token);
-        return { ok: true };
-      }
-      return { ok: false, error: data.error || '登录失败' };
-    } catch {
-      return { ok: false, error: '连接服务器失败' };
-    }
+  // ========== Agent（Web 端暂无主进程确认桥） ==========
+  onAgentConfirmRequest(_callback: (req: AgentConfirmRequest) => void): () => void {
+    return () => {};
+  }
+  respondAgentConfirm(_id: string, _allowed: boolean): void {
+    /* Web 端由服务端自行处理命令确认 */
   }
 
-  async register(username: string, password: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      const res = await fetch(`${this.baseUrl}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await res.json();
-      if (res.ok && data.token) {
-        this.setToken(data.token);
-        return { ok: true };
-      }
-      return { ok: false, error: data.error || '注册失败' };
-    } catch {
-      return { ok: false, error: '连接服务器失败' };
-    }
+  // ========== Workspace（Web 端无本地文件系统） ==========
+  workspace: WorkspaceTransport = {
+    open: async (): Promise<OpenedWorkspace | null> => {
+      console.warn('[http-transport] Web 端不支持打开本地工作区');
+      return null;
+    },
+    close: async (): Promise<void> => {},
+    getFileTree: async (): Promise<FileNode[]> => [],
+    refresh: async (): Promise<FileNode[]> => [],
+    expandDir: async (): Promise<FileNode[]> => [],
+    onFileChange: (): (() => void) => () => {},
+  };
+
+  // ========== Auth (extra, not in IPC) ==========
+  async login(username: string, password: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.authLogin({ username, password });
+    return { ok: res.ok, error: res.error };
+  }
+
+  async register(username: string, password: string, code = ''): Promise<{ ok: boolean; error?: string }> {
+    const res = await this.authRegister({ username, password, code });
+    return { ok: res.ok, error: res.error };
   }
 
   getCurrentUser(): Promise<{ id: number; username: string; role: string } | null> {
     return this.fetch<{ id: number; username: string; role: string } | null>('/auth/me').catch(() => null);
+  }
+
+  /** 统一 POST：不抛异常，统一返回 { ok, error? } 结构，便于登录页直接展示 */
+  private async postAuth(path: string, body: unknown): Promise<AuthResult> {
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (res.ok && data?.token) this.setToken(data.token);
+      const ok = res.ok && data?.ok !== false;
+      return { ...data, ok, error: ok ? undefined : (data?.error || `请求失败(${res.status})`) };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || '连接服务器失败' };
+    }
+  }
+
+  async authLogin(data: { username: string; password: string }): Promise<AuthResult> {
+    return this.postAuth('/auth/login', data);
+  }
+
+  async authRegister(data: { username: string; password: string; code: string }): Promise<AuthResult> {
+    return this.postAuth('/auth/register', data);
+  }
+
+  async sendVerificationCode(email: string, purpose: MailPurpose = 'register'): Promise<AuthResult> {
+    return this.postAuth('/auth/send-code', { email, purpose });
+  }
+
+  async resetPassword(data: { email: string; code: string; newPassword: string }): Promise<AuthResult> {
+    return this.postAuth('/auth/reset-password', data);
+  }
+
+  async getSmtpStatus(): Promise<SmtpStatus> {
+    try {
+      return await this.fetch<SmtpStatus>('/auth/smtp-status');
+    } catch {
+      return { configured: false };
+    }
+  }
+
+  async getRegistrationMode(): Promise<{ firstAccount: boolean }> {
+    try {
+      return await this.fetch<{ firstAccount: boolean }>('/auth/registration-mode');
+    } catch {
+      return { firstAccount: false };
+    }
+  }
+
+  async invoke<T = unknown>(): Promise<T> {
+    // Web 版没有微调等桌面专属通道
+    throw new Error('Web 版暂不支持该功能，请使用桌面版');
+  }
+
+  async setSmtpConfig(cfg: { user?: string; pass?: string; host?: string; port?: number }): Promise<AuthResult> {
+    try {
+      const entries: Array<[string, string | undefined]> = [
+        ['smtp_user', cfg.user],
+        ['smtp_pass', cfg.pass],
+        ['smtp_host', cfg.host],
+        ['smtp_port', cfg.port !== undefined ? String(cfg.port) : undefined],
+      ];
+      for (const [key, value] of entries) {
+        if (value === undefined || value === '') continue;
+        await this.fetch<void>(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
+      }
+      return { ok: true, message: 'SMTP 配置已保存' };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || '保存失败' };
+    }
+  }
+
+  logout(): void {
+    this.setToken(null);
+    localStorage.removeItem('auth_user');
   }
 
   // ========== Chat ==========

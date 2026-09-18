@@ -1,0 +1,77 @@
+<html style="margin:0;padding:0;">
+<title>小小榆全面优化全景图</title>
+<div style="width:100%;box-sizing:border-box;background:linear-gradient(160deg,#0b1020 0%,#101a33 45%,#0d1428 100%);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC','Microsoft YaHei',sans-serif;color:#eef2ff;padding:28px 22px;line-height:1.55;">
+  <div style="max-width:1060px;margin:0 auto;">
+
+    <!-- 标题 -->
+    <div style="text-align:center;margin-bottom:22px;">
+      <div style="font-size:26px;font-weight:700;letter-spacing:1px;background:linear-gradient(90deg,#6ea8ff,#a78bfa,#6ea8ff);-webkit-background-clip:text;background-clip:text;color:transparent;">小小榆 · 全面优化全景图</div>
+      <div style="font-size:14px;color:#9fb0d4;margin-top:6px;">提示词覆盖范围：从后端到前端到所有 ｜ 前端方向：iOS 高级玻璃质感（Liquid Glass）</div>
+    </div>
+
+    <!-- 第一行：前端（重点）+ Python -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:14px;">
+
+      <!-- 前端 重点块 -->
+      <div style="flex:1 1 520px;min-width:300px;background:rgba(255,255,255,0.07);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);border:1px solid rgba(255,255,255,0.16);border-top:1px solid rgba(255,255,255,0.32);border-radius:18px;padding:18px 20px;box-shadow:0 12px 30px rgba(0,0,0,0.35);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <span style="background:#0A84FF;color:#fff;font-size:12px;font-weight:700;border-radius:999px;padding:3px 12px;letter-spacing:1px;">最高优先级</span>
+          <span style="font-size:18px;font-weight:700;">前端 · iOS 高级玻璃质感</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;font-size:14px;">
+          <div><div style="font-weight:600;color:#8ab4ff;margin-bottom:3px;">① 玻璃设计系统</div>Token 重写：glass-bg / blur(20-40px) / 高光描边 / 噪点；iOS 系统蓝 #0A84FF；大圆角 16-20px；SF 字体栈</div>
+          <div><div style="font-weight:600;color:#8ab4ff;margin-bottom:3px;">② 氛围画布层</div>底层动态渐变 / 用户壁纸，玻璃"透"得出来，玻璃感才成立</div>
+          <div><div style="font-weight:600;color:#8ab4ff;margin-bottom:3px;">③ 组件全覆盖</div>侧边栏·标题栏·消息气泡·输入栏·弹窗·设置·微调面板·登录页逐一玻璃化</div>
+          <div><div style="font-weight:600;color:#8ab4ff;margin-bottom:3px;">④ iOS 动效</div>弹簧曲线 cubic-bezier(0.34,1.56,0.64,1)·按压反馈·滑动转场·三点脉冲</div>
+          <div><div style="font-weight:600;color:#8ab4ff;margin-bottom:3px;">⑤ 明暗双模式</div>两套玻璃 Token（暗色更低透明 + 冷色调 + 亮描边），跟随系统</div>
+          <div><div style="font-weight:600;color:#8ab4ff;margin-bottom:3px;">⑥ 性能约束</div>backdrop-filter 嵌套 ≤2 层、限定 blur 范围、低端机降级纯半透明</div>
+        </div>
+      </div>
+
+      <!-- Python 微调 -->
+      <div style="flex:1 1 300px;min-width:280px;background:rgba(255,255,255,0.07);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);border:1px solid rgba(255,255,255,0.16);border-top:1px solid rgba(255,255,255,0.32);border-radius:18px;padding:18px 20px;box-shadow:0 12px 30px rgba(0,0,0,0.35);">
+        <div style="font-size:18px;font-weight:700;margin-bottom:12px;">Python · 微调链路</div>
+        <div style="font-size:14px;display:grid;gap:8px;">
+          <div>· train.py 补全验证，输出结构化进度 JSON（epoch/loss/eta/显存）</div>
+          <div>· 显存不足自动降级建议；训练结束 empty_cache 释放</div>
+          <div>· 断点续训 + 进程取消时干净终止</div>
+          <div>· export 幂等；任务队列 + 后台训练（最小化到托盘）</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 第二行：后端 + 工程化 -->
+    <div style="display:flex;flex-wrap:wrap;gap:14px;">
+
+      <!-- 后端 -->
+      <div style="flex:1 1 520px;min-width:300px;background:rgba(255,255,255,0.07);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);border:1px solid rgba(255,255,255,0.16);border-top:1px solid rgba(255,255,255,0.32);border-radius:18px;padding:18px 20px;box-shadow:0 12px 30px rgba(0,0,0,0.35);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <span style="background:#34C759;color:#fff;font-size:12px;font-weight:700;border-radius:999px;padding:3px 12px;letter-spacing:1px;">进行中</span>
+          <span style="font-size:18px;font-weight:700;">后端 · Electron 主进程 + Express</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;font-size:14px;">
+          <div><div style="font-weight:600;color:#7ee2a8;margin-bottom:3px;">QQ 邮箱认证改造</div>登录 = QQ 邮箱 + 密码；注册 = QQ 邮箱 + 邮箱验证码（SMTP 授权码、验证码一次性/限频/过期、旧数据迁移）</div>
+          <div><div style="font-weight:600;color:#7ee2a8;margin-bottom:3px;">主进程瘦身</div>Ollama / 自动更新抽独立 service，IPC 薄 service 厚</div>
+          <div><div style="font-weight:600;color:#7ee2a8;margin-bottom:3px;">IPC 规范化</div>入参校验、统一 {ok,data|error}、错误码、路径穿越防护</div>
+          <div><div style="font-weight:600;color:#7ee2a8;margin-bottom:3px;">安全加固</div>safeStorage 存凭据、CSP、登录防爆破、日志脱敏</div>
+          <div><div style="font-weight:600;color:#7ee2a8;margin-bottom:3px;">日志与错误</div>分级 + 轮转 + 全局异常兜底 + 用户可读错误</div>
+          <div><div style="font-weight:600;color:#7ee2a8;margin-bottom:3px;">性能</div>sql.js 迁 Worker、SSE 心跳断线重连、消息虚拟滚动</div>
+        </div>
+      </div>
+
+      <!-- 工程化 -->
+      <div style="flex:1 1 300px;min-width:280px;background:rgba(255,255,255,0.07);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);border:1px solid rgba(255,255,255,0.16);border-top:1px solid rgba(255,255,255,0.32);border-radius:18px;padding:18px 20px;box-shadow:0 12px 30px rgba(0,0,0,0.35);">
+        <div style="font-size:18px;font-weight:700;margin-bottom:12px;">全链路工程化</div>
+        <div style="font-size:14px;display:grid;gap:8px;">
+          <div>· 性能指标：启动 &lt;3s · UI 响应 &lt;100ms · 内存 &lt;2GB</div>
+          <div>· 打包：asar 评估 · 代码签名 · 产物体积治理</div>
+          <div>· 测试：适配器/加密/限流单测 + IPC 集成 + 冒烟</div>
+          <div>· 文档：架构说明 / 玻璃设计系统 / API 与 IPC 接口说明</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部提示 -->
+    <div style="margin-top:18px;text-align:center;font-size:13px;color:#7f8fba;">配套文档：《小小榆项目优化提示词.md》｜ 标注「进行中」= QQ 邮箱认证改造，目标已定、代码未落地</div>
+  </div>
+</div>

@@ -1,0 +1,13 @@
+{
+  "name": "xiaoxiaoyu-mail-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "小小榆在线发码服务：用 QQ 邮箱发注册/重置密码验证码，授权码只留服务端",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.14"
+  }
+}

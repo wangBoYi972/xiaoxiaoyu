@@ -158,3 +158,6 @@ function saveMcpConfig(config: MCPConfigFile): void {
     logger.error('保存 MCP 配置文件失败', e as Error);
   }
 }
+
+// 导出 mcpManager 供 AgentRunner 使用
+export { mcpManager };

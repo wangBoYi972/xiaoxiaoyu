@@ -2,7 +2,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import { authMiddleware } from '../middleware/auth';
 import { queryAll, queryOne, execute } from '../store/database';
 import { logger } from '../utils/logger';
@@ -79,7 +79,7 @@ export function skillsRoutes(): Router {
   // DELETE /api/skills/:id — 删除
   router.delete('/:id', (req: Request, res: Response) => {
     try {
-      if (!isValidSkillId(req.params.id)) {
+      if (!isValidSkillId(String(req.params.id))) {
         res.status(400).json({ success: false, error: '技能ID格式无效' }); return;
       }
       const skillPath = path.join(SKILLS_DIR, `${req.params.id}.json`);
@@ -97,7 +97,7 @@ export function skillsRoutes(): Router {
   // GET /api/skills/:id/export — 导出
   router.get('/:id/export', (req: Request, res: Response) => {
     try {
-      if (!isValidSkillId(req.params.id)) {
+      if (!isValidSkillId(String(req.params.id))) {
         res.json({ json: null }); return;
       }
       const skillPath = path.join(SKILLS_DIR, `${req.params.id}.json`);
@@ -106,7 +106,7 @@ export function skillsRoutes(): Router {
         res.json({ json });
       } else {
         // 检查内置技能
-        const builtin = BUILTIN_SKILLS.find(s => s.id === req.params.id);
+        const builtin = BUILTIN_SKILLS.find(s => s.id === String(req.params.id));
         res.json({ json: builtin ? JSON.stringify(builtin) : null });
       }
     } catch (e: any) {

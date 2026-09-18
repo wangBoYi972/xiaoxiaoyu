@@ -19,30 +19,9 @@ export function CodeBlock({ language, code }: CodeBlockProps) {
   };
 
   return (
-    <div
-      style={{
-        borderRadius: 12,
-        overflow: 'hidden',
-        margin: '8px 0',
-        border: '1px solid rgba(255,255,255,0.2)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
-      }}
-    >
+    <div className="code-block">
       {/* 代码头 */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '6px 14px',
-          background: 'rgba(255,255,255,0.6)',
-          backdropFilter: 'blur(8px)',
-          WebkitBackdropFilter: 'blur(8px)',
-          borderBottom: '1px solid rgba(255,255,255,0.3)',
-        }}
-      >
+      <div className="code-block-head">
         <Text type="secondary" style={{ fontSize: 12 }}>
           {language || 'text'}
         </Text>

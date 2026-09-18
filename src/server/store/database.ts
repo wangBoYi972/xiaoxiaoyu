@@ -106,6 +106,7 @@ export async function initDatabase(): Promise<void> {
 
   // 为新版本兼容：先尝试添加可能缺失的列
   try { db.run('ALTER TABLE users ADD COLUMN must_change_pwd INTEGER DEFAULT 0'); } catch {}
+  try { db.run('ALTER TABLE users ADD COLUMN email TEXT'); } catch {}
 
   // 创建默认管理员（PBKDF2 哈希）
   const adminRow = queryOne('SELECT id FROM users WHERE username = ?', ['admin']);

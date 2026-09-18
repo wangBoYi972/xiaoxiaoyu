@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN" class="theme-dark">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Monaco 编辑器验证台</title>
+  </head>
+  <body class="dark-theme">
+    <div id="root"></div>
+    <script>
+      // 浏览器预览没有 Electron 主进程，补一个最小 stub 让保存走得通
+      window.electronAPI = {
+        file: {
+          write: async (path, content) => ({ success: true, path, bytes: content.length }),
+          readText: async () => ({ success: true, content: '' }),
+        },
+      };
+      // URL 带 ?noworker=1 时强制走主线程模式（模拟打包后的 file://）
+      if (new URLSearchParams(location.search).get('noworker') === '1') {
+        window.__xxyForceNoWorker = true;
+      }
+    </script>
+    <script type="module" src="./editor-preview.tsx"></script>
+  </body>
+</html>

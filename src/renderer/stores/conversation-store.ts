@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import api from '../../api';
 
-interface Conversation {
+export interface Conversation {
   id: string;
   title: string;
   modelId: string;
@@ -19,6 +19,7 @@ interface ConversationStore {
 
   loadConversations: () => Promise<void>;
   setActive: (id: string) => void;
+  setActiveId: (id: string) => void;
   createConversation: (title: string, modelId: string, providerId: string) => Promise<Conversation>;
   deleteConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, title: string) => Promise<void>;
@@ -32,7 +33,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   loadConversations: async () => {
     set({ loading: true });
     try {
-      const conversations = await api.listConversations();
+      // 数据库里 isPinned 是 0/1，这里统一归一化成 boolean
+      const conversations = (await api.listConversations()).map((c: any) => ({ ...c, isPinned: !!c.isPinned }));
       set({ conversations, loading: false });
     } catch {
       set({ loading: false });
@@ -40,9 +42,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   setActive: (id) => set({ activeId: id }),
+  setActiveId: (id) => set({ activeId: id }),
 
   createConversation: async (title, modelId, providerId) => {
-    const conv = await api.createConversation({ title, modelId, providerId });
+    const raw = await api.createConversation({ title, modelId, providerId });
+    const conv = { ...raw, isPinned: !!raw.isPinned } as Conversation;
     set((state) => ({
       conversations: [conv, ...state.conversations],
       activeId: conv.id,

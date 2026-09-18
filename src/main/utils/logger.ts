@@ -1,40 +1,22 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import path from 'path';
 import { app } from 'electron';
+import { LogCore } from '../../shared/log-core';
 
-class Logger {
-  private logPath: string;
-
-  constructor() {
-    const userDataPath = app?.getPath('userData') || process.cwd();
-    this.logPath = path.join(userDataPath, 'app.log');
-  }
-
-  private write(level: string, message: string) {
-    const timestamp = new Date().toISOString();
-    const line = `[${timestamp}] [${level}] ${message}\n`;
-    try {
-      fs.appendFileSync(this.logPath, line);
-    } catch {
-      // 忽略日志写入失败
-    }
-    if (process.env.NODE_ENV === 'development') {
-      console.log(line.trim());
-    }
-  }
-
-  info(message: string) {
-    this.write('INFO', message);
-  }
-
-  warn(message: string) {
-    this.write('WARN', message);
-  }
-
-  error(message: string, error?: Error) {
-    const errMsg = error ? `${message}: ${error.message}\n${error.stack}` : message;
-    this.write('ERROR', errMsg);
-  }
+// 日志目录：%APPDATA%\<app>\logs（app 未就绪时退回 cwd/logs）
+function resolveLogDir(): string {
+  try {
+    const userData = app?.getPath?.('userData');
+    if (userData) return path.join(userData, 'logs');
+  } catch { /* app 尚未就绪 */ }
+  return path.join(process.cwd(), 'logs');
 }
 
-export const logger = new Logger();
+const core = new LogCore({ dir: resolveLogDir(), scope: 'app', retainDays: 7 });
+
+export const logger = {
+  debug: (message: string) => core.debug(message),
+  info: (message: string) => core.info(message),
+  warn: (message: string) => core.warn(message),
+  error: (message: string, error?: Error) => core.error(message, error),
+  setLevel: (level: 'debug' | 'info' | 'warn' | 'error') => core.setLevel(level),
+};

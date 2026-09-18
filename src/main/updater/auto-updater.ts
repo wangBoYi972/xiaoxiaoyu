@@ -7,17 +7,34 @@ import * as os from 'os';
 import * as childProcess from 'child_process';
 import { logger } from '../utils/logger';
 
-const CURRENT_VERSION = '3.0.0';
+// 跟随 package.json，避免版本判断失真（此前写死 3.0.0，实际版本早已超过）
+const CURRENT_VERSION = app.getVersion();
 const DEFAULT_UPDATE_URL = '';  // 空 = 不联网检查，需手动在设置中配置
 
 interface UpdateInfo { version: string; downloadUrl: string; releaseNotes: string; sha256?: string; }
 interface Announcement { id: string; title: string; content: string; level: 'info' | 'warning' | 'important'; validUntil?: string; }
 
-// 内置欢迎公告——即使连不上网络也显示
+// 内置公告——即使连不上网络也显示。
+// id 变更即视为「新公告」会重新弹出；旧 id 已被标记为已读，自动隐藏，无需额外处理。
 const BUILTIN_ANNOUNCEMENT: Announcement = {
-  id: 'v1.5-welcome',
-  title: ' 小小榆 v1.5 发布',
-  content: 'v1.5 重磅更新：\n\n 技能市场正式上线\n• 主页直接浏览安装28个技能\n• 聊天框输入"技能列表"查看全部\n• 输入"安装技能 名字"一键安装\n• 远程仓库自动同步最新技能\n\n 窗口控制创意升级\n• 最小化=橙色 · 最大化=绿色 · 关闭=红色\n\n 深色主题全面覆盖\n• 所有组件完美适配暗色模式\n\n 全新首页 + 对话信息栏\n\n 12个内置技能 + 16个社区技能',
+  id: 'v3.1.0-rag',
+  title: '小小榆 v3.1.0 发布',
+  content:
+    'v3.1.0 更新：\n\n' +
+    ' RAG 向量检索（知识库）\n' +
+    '• 工作区代码可被向量化索引，支持语义检索「登录校验在哪」这类自然语言提问\n' +
+    '• 嵌入后端三选一：Ollama 本地模型 / OpenAI 兼容 embeddings / 本地哈希兜底（离线可用）\n' +
+    '• Agent 新增 search_codebase、build_codebase_index 两个工具，自动检索相关代码注入上下文\n' +
+    '• 设置 → 知识库(RAG) 可一键建索引；输入框顶部 chip 显示已索引块数\n\n' +
+    ' 项目启动器（真启动器）\n' +
+    '• 「启动项目」直接拉起进程跑 npm script，不再只是把命令丢给 AI\n' +
+    '• 完整继承系统环境：JDK / Node / Python / Git / Maven 都能读到\n' +
+    '• 新增终端面板：实时输出、自动滚动、localhost 链接可点、随时停止\n\n' +
+    ' 供应商完全自定义\n' +
+    '• 不再只有内置几家：任意中转站 / 企业网关 / 本地推理服务都能加\n' +
+    '• 填 名称 + Base URL + API Key + 模型 ID 即可，内置常用端点模板\n\n' +
+    ' 界面\n' +
+    '• 浅色主题玻璃质感重调，面板边界与层次更清晰',
   level: 'important',
 };
 
@@ -188,21 +205,22 @@ export async function downloadAndInstall(downloadUrl: string, expectedSha256?: s
     if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true });
     fs.mkdirSync(extractDir, { recursive: true });
 
-    // 使用 spawn 数组参数避免命令注入
-    childProcess.spawn('powershell', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`,
-    ], { windowsHide: true, timeout: 120000 });
-
-    // 等待解压完成
+    // 使用 spawn 数组参数避免命令注入，并真正等待解压结果
+    // （旧实现不等待、只轮询目录，解压失败会无限循环且用户无感知）
     await new Promise<void>((resolve, reject) => {
-      const check = () => {
-        try {
-          if (fs.readdirSync(extractDir).length > 0) resolve();
-          else setTimeout(check, 500);
-        } catch { setTimeout(check, 500); }
-      };
-      setTimeout(check, 1000);
+      const proc = childProcess.spawn('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`,
+      ], { windowsHide: true });
+      let stderr = '';
+      proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      const timer = setTimeout(() => { proc.kill(); reject(new Error('解压超时（120 秒）')); }, 120000);
+      proc.on('exit', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(new Error(`解压失败（退出码 ${code}）: ${stderr.slice(0, 200)}`));
+      });
+      proc.on('error', (e) => { clearTimeout(timer); reject(e); });
     });
 
     notify('update:progress', { stage: 'installing', percent: 50 });
@@ -230,10 +248,10 @@ export async function downloadAndInstall(downloadUrl: string, expectedSha256?: s
   }
 }
 
-/** 手动显示公告（从标题栏入口） */
+/** 手动显示公告（渲染层 mount 后补发 / 标题栏入口）：只弹未读的，已读的自动隐藏 */
 export function showAnnouncements(): void {
   const read = getReadAnnouncementIds();
-  // 手动查看时显示内置公告（即使已读）
+  if (read.has(BUILTIN_ANNOUNCEMENT.id)) return;
   notify('announcement:show', BUILTIN_ANNOUNCEMENT);
 }
 

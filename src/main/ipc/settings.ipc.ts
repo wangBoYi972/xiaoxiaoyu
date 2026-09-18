@@ -101,7 +101,7 @@ export function registerSettingsHandlers(): void {
   ipcMain.handle('provider:test', async (_event, id: string) => {
     try {
       const row = queryOne(
-        'SELECT id, name, api_key_enc, base_url FROM provider_configs WHERE id = ? AND enabled = 1',
+        'SELECT id, name, api_key_enc, base_url, models_json FROM provider_configs WHERE id = ? AND enabled = 1',
         [id]
       );
       if (!row) return false;
@@ -110,6 +110,13 @@ export function registerSettingsHandlers(): void {
       const baseUrl = row.base_url || '';
       if (!apiKey && id !== 'ollama') return false;
 
+      // 带上用户配置的模型 ID：测试连接要用真实存在的模型去试，
+      // 否则适配器会回退到 deepseek-chat，中转站上没这个模型就误判"连接失败"
+      let models: string[] = [];
+      if (row.models_json) {
+        try { models = JSON.parse(row.models_json) || []; } catch { models = []; }
+      }
+
       const router = new ModelRouter();
       return await router.testProvider({
         id: row.id,
@@ -117,7 +124,7 @@ export function registerSettingsHandlers(): void {
         apiKey,
         baseUrl,
         enabled: true,
-        models: [],
+        models,
       });
     } catch (error) {
       logger.error('测试提供商连接失败', error as Error);

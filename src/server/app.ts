@@ -12,10 +12,35 @@ import { providerRoutes } from './routes/providers';
 import { settingsRoutes } from './routes/settings';
 import { skillsRoutes } from './routes/skills';
 import { captchaRoutes } from './routes/captcha';
+import { loginGuardMiddleware } from './middleware/login-guard';
 import { logger } from './utils/logger';
+
+// 是否存在生产前端产物（决定静态托管 + 是否下发严格 CSP）
+const STATIC_DIR = path.join(__dirname, '..', '..', 'renderer');
+const HAS_STATIC = (() => {
+  try { return fs.existsSync(path.join(STATIC_DIR, 'index.html')); } catch { return false; }
+})();
+
+/** 生产模式的 CSP：允许内联样式（antd 运行时注入）、同源脚本与连接 */
+const CSP_PROD = [
+  "default-src 'self'",
+  "img-src 'self' data: blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self'",
+  "connect-src 'self'",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
 
 export function createApp(): express.Application {
   const app = express();
+  // 反向代理下才信任 X-Forwarded-For（默认关闭，避免伪造 IP 绕过限流）；
+  // 部署在 nginx/CDN 后面时设置 TRUST_PROXY=1 或直接填代理层数
+  if (process.env.TRUST_PROXY) {
+    app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : process.env.TRUST_PROXY);
+  }
 
   // 中间件
 const ALLOWED_ORIGINS = process.env.CORS_ORIGIN
@@ -29,12 +54,30 @@ app.use(cors({
   maxAge: 86400,
 }));
 
+// 请求日志（方法 / 路径 / 状态码 / 耗时）
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - startedAt;
+    const line = `${req.method} ${req.originalUrl} ${res.statusCode} ${ms}ms`;
+    // 静态资源不刷屏；错误码用 warn 方便排查
+    if (req.originalUrl.startsWith('/assets/') || req.originalUrl === '/favicon.ico') return;
+    if (res.statusCode >= 500) logger.error(line);
+    else if (res.statusCode >= 400) logger.warn(line);
+    else logger.info(line);
+  });
+  next();
+});
+
 // 安全响应头
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // 仅在托管生产前端时下发严格 CSP，避免打断 Vite 开发模式（HMR 需要 ws/inline）
+  if (HAS_STATIC) res.setHeader('Content-Security-Policy', CSP_PROD);
   next();
 });
 
@@ -44,30 +87,40 @@ app.use(express.urlencoded({ extended: true }));
 // app.use(compression({ filter: ... }));
 
 
-// 登录接口速率限制（每 IP 每分钟 20 次）
-const loginRateLimit = new Map<string, { count: number; reset: number }>();
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, val] of loginRateLimit) {
-    if (val.reset < now) loginRateLimit.delete(key);
-  }
-}, 60000);
-
-app.use('/api/auth/login', (req, res, next) => {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  const now = Date.now();
-  const entry = loginRateLimit.get(ip);
-  if (entry && now < entry.reset) {
-    if (entry.count > 20) {
-      res.status(429).json({ error: '登录尝试过于频繁，请1分钟后再试' });
-      return;
+// 认证接口速率限制（按 IP，滑动窗口 1 分钟）
+function createRateLimit(max: number, message: string) {
+  const buckets = new Map<string, { count: number; reset: number }>();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, val] of buckets) {
+      if (val.reset < now) buckets.delete(key);
     }
-    entry.count++;
-  } else {
-    loginRateLimit.set(ip, { count: 1, reset: now + 60000 });
-  }
-  next();
-});
+  }, 60000);
+
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const entry = buckets.get(ip);
+    if (entry && now < entry.reset) {
+      if (entry.count >= max) {
+        res.status(429).json({ ok: false, error: message });
+        return;
+      }
+      entry.count++;
+    } else {
+      buckets.set(ip, { count: 1, reset: now + 60000 });
+    }
+    next();
+  };
+}
+
+app.use('/api/auth/login', createRateLimit(20, '登录尝试过于频繁，请1分钟后再试'));
+// 失败计数封禁（慢速撞库防护）
+app.use('/api/auth/login', loginGuardMiddleware);
+// 验证码发送：防刷邮件（1 分钟 5 次）
+app.use('/api/auth/send-code', createRateLimit(5, '验证码发送过于频繁，请1分钟后再试'));
+app.use('/api/auth/register', createRateLimit(10, '操作过于频繁，请1分钟后再试'));
+app.use('/api/auth/reset-password', createRateLimit(10, '操作过于频繁，请1分钟后再试'));
 
 // 初始化认证
   initAuth();
@@ -267,9 +320,15 @@ app.use('/api/auth/login', (req, res, next) => {
     } catch (e: any) { res.status(500).json({ error: e.message }); }
   });
 
+  // API 404：未匹配的接口返回 JSON，而不是 HTML 错误页
+  // 必须放在 SPA fallback 之前，否则 GET /api/xxx 会被 fallback 吞掉
+  app.use('/api', (req, res) => {
+    res.status(404).json({ ok: false, error: `接口不存在: ${req.method} ${req.originalUrl}` });
+  });
+
   // 静态文件服务（生产环境提供 React SPA）
-  const staticDir = path.join(__dirname, '..', '..', 'renderer');
-  const hasStatic = (() => { try { return fs.existsSync(path.join(staticDir, 'index.html')); } catch { return false; } })();
+  const staticDir = STATIC_DIR;
+  const hasStatic = HAS_STATIC;
 
   if (hasStatic) {
     // 静态资源缓存：JS/CSS 带 hash → 1年缓存，HTML 不缓存
@@ -303,6 +362,19 @@ app.use('/api/auth/login', (req, res, next) => {
       });
     });
   }
+
+  // 统一错误中间件：兜住路由内抛出的异常与 next(err)
+  // 注意：Express 5 中 async 路由抛出的 Promise rejection 也会走到这里
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+    logger.error(`未处理异常 ${req.method} ${req.originalUrl}`, err instanceof Error ? err : new Error(String(err?.message || err)));
+    if (res.headersSent) return;
+    res.status(status).json({
+      ok: false,
+      error: status === 500 ? '服务器内部错误，请稍后再试' : (err?.message || '请求处理失败'),
+      code: err?.code || (status === 500 ? 'INTERNAL_ERROR' : undefined),
+    });
+  });
 
   return app;
 }

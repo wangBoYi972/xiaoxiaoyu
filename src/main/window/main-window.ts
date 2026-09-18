@@ -1,5 +1,7 @@
 import { BrowserWindow, shell, app } from 'electron';
 import path from 'path';
+import { getAppRendererURL } from './app-protocol';
+import { logger } from '../utils/logger';
 
 let mainWindow: BrowserWindow | null = null;
 const isDev = !app.isPackaged;
@@ -43,8 +45,15 @@ export function createMainWindow(): BrowserWindow {
   });
 
   // 监听渲染进程错误
+  let fellBackToFile = false;
   mainWindow.webContents.on('did-fail-load' as any, (_event: any, errorCode: number, errorDescription: string, validatedURL: string) => {
-    console.error(`[main-window] 页面加载失败: ${errorDescription} (${errorCode}) URL: ${validatedURL}`);
+    logger.error(`页面加载失败: ${errorDescription} (${errorCode}) URL: ${validatedURL}`);
+    // app:// 万一不可用（协议处理异常等），退回 file:// 保底能打开
+    if (!fellBackToFile && typeof validatedURL === 'string' && validatedURL.startsWith('app://')) {
+      fellBackToFile = true;
+      logger.warn('回退到 file:// 加载渲染层');
+      mainWindow?.loadFile(rendererPath).catch(() => {});
+    }
   });
   mainWindow.webContents.on('render-process-gone' as any, (_event: any, details: any) => {
     console.error(`[main-window] 渲染进程退出: reason=${details.reason} exitCode=${details.exitCode}`);
@@ -54,8 +63,12 @@ export function createMainWindow(): BrowserWindow {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(rendererPath).catch(err => {
-      console.error('[main-window] loadFile 失败:', err);
+    // 生产环境用 app:// 自定义协议加载：
+    // file:// 是 opaque origin，Web Worker（Monaco 语言服务必需）会被同源策略拦
+    mainWindow.loadURL(getAppRendererURL()).catch(async (err) => {
+      logger.error(`app:// 加载失败，回退 loadFile: ${err?.message || err}`);
+      fellBackToFile = true;
+      await mainWindow!.loadFile(rendererPath).catch(() => {});
     });
   }
 

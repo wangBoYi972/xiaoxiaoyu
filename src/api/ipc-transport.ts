@@ -5,7 +5,10 @@ import type {
   ApiTransport, StreamChunk, Conversation, Message,
   ProviderConfig, ProviderSaveInput, FileData, FileFilter,
   SkillItem, UpdateInfo, UpdateProgress, Announcement,
+  AgentConfirmRequest, AuthResult, MailPurpose, SmtpStatus, WorkspaceTransport,
+  OpenedWorkspace,
 } from './transport';
+import type { FileNode } from '../renderer/stores/workspace-store';
 
 export class IpcTransport implements ApiTransport {
   private api: any;
@@ -28,21 +31,66 @@ export class IpcTransport implements ApiTransport {
     return this.api.onStreamChunk(callback);
   }
 
+  // ========== Agent ==========
+  onAgentConfirmRequest(callback: (req: AgentConfirmRequest) => void): () => void {
+    if (!this.api.onAgentConfirmRequest) return () => {};
+    return this.api.onAgentConfirmRequest(callback);
+  }
+  respondAgentConfirm(id: string, allowed: boolean): void {
+    this.api.respondAgentConfirm?.(id, allowed);
+  }
+
+  // ========== Workspace ==========
+  // 主进程返回统一为 { success, error? } 信封，这里解开成前端友好的形状
+  workspace: WorkspaceTransport = {
+    open: async (): Promise<OpenedWorkspace | null> => {
+      const res = await this.api.workspace?.open?.();
+      return res?.success && res.workspace ? (res.workspace as OpenedWorkspace) : null;
+    },
+    close: async (workspacePath?: string): Promise<void> => {
+      await this.api.workspace?.close?.(workspacePath);
+    },
+    getFileTree: async (workspacePath: string): Promise<FileNode[]> => {
+      const res = await this.api.workspace?.getFileTree?.(workspacePath);
+      return res?.success ? (res.fileTree || []) : [];
+    },
+    refresh: async (workspacePath: string): Promise<FileNode[]> => {
+      const res = await this.api.workspace?.refresh?.(workspacePath);
+      return res?.success ? (res.fileTree || []) : [];
+    },
+    expandDir: async (dirPath: string): Promise<FileNode[]> => {
+      const res = await this.api.workspace?.expandDir?.(dirPath);
+      return res?.success ? (res.children || []) : [];
+    },
+    onFileChange: (callback: (event: { type: string; path: string }) => void): (() => void) => {
+      if (!this.api.workspace?.onFileChange) return () => {};
+      return this.api.workspace.onFileChange(callback);
+    },
+  };
+
   // ========== Conversations ==========
+  /** 当前登录用户 id（多账号数据隔离用）；游客返回空串 */
+  private currentUserId(): string {
+    try {
+      const u = JSON.parse(localStorage.getItem('auth_user') || localStorage.getItem('desktop_user') || 'null');
+      return u && u.id != null ? String(u.id) : '';
+    } catch { return ''; }
+  }
+
   async listConversations(): Promise<Conversation[]> {
-    return this.api.listConversations();
+    return this.api.listConversations(this.currentUserId());
   }
   async getConversation(id: string): Promise<Conversation | null> {
-    return this.api.getConversation(id);
+    return this.api.getConversation(id, this.currentUserId());
   }
   async createConversation(data: { title?: string; modelId: string; providerId: string }): Promise<Conversation> {
-    return this.api.createConversation(data);
+    return this.api.createConversation({ ...data, userId: this.currentUserId() });
   }
   async deleteConversation(id: string): Promise<void> {
-    return this.api.deleteConversation(id);
+    return this.api.deleteConversation(id, this.currentUserId());
   }
   async renameConversation(id: string, title: string): Promise<void> {
-    return this.api.renameConversation(id, title);
+    return this.api.renameConversation(id, title, this.currentUserId());
   }
 
   // ========== Messages ==========
@@ -121,8 +169,32 @@ export class IpcTransport implements ApiTransport {
   async showAnnouncements(): Promise<void> { return this.api.showAnnouncements(); }
 
   // ========== Auth ==========
-  async authLogin(username: string, password: string) { return this.api.authLogin({ username, password }); }
-  async authRegister(username: string, password: string) { return this.api.authRegister({ username, password }); }
+  async authLogin(data: { username: string; password: string }): Promise<AuthResult> {
+    return this.api.authLogin(data);
+  }
+  async authRegister(data: { username: string; password: string; code: string }): Promise<AuthResult> {
+    return this.api.authRegister(data);
+  }
+  async sendVerificationCode(email: string, purpose: MailPurpose = 'register'): Promise<AuthResult> {
+    return this.api.sendVerificationCode(email, purpose);
+  }
+  async resetPassword(data: { email: string; code: string; newPassword: string }): Promise<AuthResult> {
+    return this.api.resetPassword(data);
+  }
+  async getSmtpStatus(): Promise<SmtpStatus> {
+    return this.api.getSmtpStatus?.(this.currentUserId()) ?? { configured: false };
+  }
+  async setSmtpConfig(cfg: { user?: string; pass?: string; host?: string; port?: number }): Promise<AuthResult> {
+    return this.api.setSmtpConfig?.(cfg, this.currentUserId()) ?? { ok: false, error: '当前版本不支持配置 SMTP' };
+  }
+  async getRegistrationMode(): Promise<{ firstAccount: boolean }> {
+    return this.api.getRegistrationMode?.() ?? { firstAccount: false };
+  }
+  async invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
+    const fn = (this.api as any).invoke;
+    if (typeof fn !== 'function') throw new Error('当前版本不支持该功能');
+    return fn.call(this.api, channel, ...args) as Promise<T>;
+  }
 
   // ========== Skills ==========
   async listSkills(): Promise<SkillItem[]> { return this.api.listSkills(); }

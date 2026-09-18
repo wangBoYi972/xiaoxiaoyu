@@ -7,9 +7,16 @@ import type { Database as SqlJsDatabase } from 'sql.js';
 
 // 延迟获取数据库，避免在模块加载时调用
 let db: any = null;
+let dbInitialized = false;
+
 function getDb() {
   if (!db) {
     db = getDatabase() as any;
+  }
+  // 首次获取时初始化表结构
+  if (!dbInitialized) {
+    initDatabaseTables();
+    dbInitialized = true;
   }
   return db;
 }
@@ -56,9 +63,9 @@ export interface FinetuneTask {
   updated_at?: number;
 }
 
-// 初始化数据库表
-function initDatabase() {
-  getDb().exec(`
+// 初始化数据库表结构
+function initDatabaseTables() {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS datasets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -92,8 +99,6 @@ function initDatabase() {
     );
   `);
 }
-
-initDatabase();
 
 // ==================== 数据集管理 ====================
 

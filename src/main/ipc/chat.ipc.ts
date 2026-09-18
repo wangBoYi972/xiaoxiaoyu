@@ -2,11 +2,36 @@ import { ipcMain, BrowserWindow } from 'electron';
 import { getDatabase, saveDatabase } from '../store/database';
 import { decryptApiKey } from '../store/crypto';
 import { logger } from '../utils/logger';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import { ModelRouter } from '../../adapters/index';
+import type { ToolDefinition } from '../../adapters/types';
+import { mcpManager } from './mcp.ipc';
+import { AgentRunner } from '../agent/agent-runner';
+import { isWorkspaceApproved } from './file.ipc';
+import {
+  requireString, optionalString, requireArray, requireEnum,
+  optionalNumber, optionalBoolean, ValidationError, isValidationError,
+} from '../../shared/validate';
 
 const modelRouter = new ModelRouter();
+const agentRunner = new AgentRunner(modelRouter);
 const activeRequests = new Map<string, AbortController>();
+
+// Agent 命令执行确认：主进程发起 → 渲染进程弹窗 → 回传结果
+const pendingConfirmations = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>();
+
+function makeConfirmer(sender: Electron.WebContents): (title: string, detail: string) => Promise<boolean> {
+  return (title: string, detail: string) => new Promise<boolean>((resolve) => {
+    const id = uuidv4();
+    const timer = setTimeout(() => {
+      pendingConfirmations.delete(id);
+      resolve(false); // 超时视为拒绝
+    }, 180_000);
+    pendingConfirmations.set(id, { resolve, timer });
+    if (sender.isDestroyed()) { clearTimeout(timer); pendingConfirmations.delete(id); resolve(false); return; }
+    sender.send('agent:confirm-request', { id, title, detail });
+  });
+}
 
 // 简单的 token 估算（中文≈1.5字/1token，英文≈4字/1token）
 function estimateTokens(text: string | any[]): number {
@@ -82,15 +107,44 @@ function loadProviderConfig(providerId: string): { apiKey: string; baseUrl: stri
 
 export function registerChatHandlers(): void {
   ipcMain.handle('chat:send', async (event, data) => {
-    const {
-      providerId,
-      modelId,
-      messages,
-      systemPrompt,
-      temperature,
-      maxTokens,
-      conversationId,
-    } = data;
+    // 入参校验：不信任 renderer 输入（保持下方业务代码使用同名变量，改动最小）
+    let providerId: string;
+    let modelId: string;
+    let messages: Array<{ role: string; content: any }>;
+    let systemPrompt: string | undefined;
+    let temperature: number | undefined;
+    let maxTokens: number | undefined;
+    let conversationId: string | undefined;
+    let agentMode: boolean | undefined;
+    let workspacePath: string | undefined;
+
+    try {
+      const raw = (data || {}) as Record<string, any>;
+      providerId = requireString(raw.providerId, 'providerId', { max: 64 });
+      modelId = requireString(raw.modelId, 'modelId', { max: 128 });
+      messages = requireArray(raw.messages, 'messages', { min: 1, max: 500 }).map((m: any, i: number) => {
+        const role = requireEnum(m?.role, `messages[${i}].role`, ['system', 'user', 'assistant', 'tool'] as const);
+        const content = m?.content;
+        if (typeof content !== 'string' && !Array.isArray(content)) {
+          throw new ValidationError(`messages[${i}].content`, '消息内容必须是字符串或数组');
+        }
+        return { role, content };
+      });
+      systemPrompt = optionalString(raw.systemPrompt, 'systemPrompt', { max: 200_000 });
+      temperature = optionalNumber(raw.temperature, 'temperature', { min: 0, max: 2 });
+      maxTokens = optionalNumber(raw.maxTokens, 'maxTokens', { min: 1, max: 200_000, integer: true });
+      conversationId = optionalString(raw.conversationId, 'conversationId', { max: 64 });
+      agentMode = optionalBoolean(raw.agentMode, 'agentMode');
+      workspacePath = optionalString(raw.workspacePath, 'workspacePath', { max: 4096 });
+    } catch (e) {
+      const msg = isValidationError(e) ? e.message : '请求参数不合法';
+      logger.warn(`chat:send 入参校验失败: ${msg}`);
+      BrowserWindow.fromWebContents(event.sender)?.webContents.send('chat:stream-chunk', {
+        type: 'error',
+        error: { message: msg, code: 'INVALID_INPUT' },
+      });
+      return;
+    }
 
     const abortController = new AbortController();
     const requestId = uuidv4();
@@ -129,8 +183,27 @@ export function registerChatHandlers(): void {
       const trimmedMessages = trimMessages(messages);
       logger.info(`发送聊天: provider=${providerId}, model=${modelId}, msgs=${trimmedMessages.length}, hasKey=${!!providerConfig.apiKey}`);
 
-      // 调用模型适配器（传入真实凭据）
-      const stream = modelRouter.chat({
+      // 获取 MCP 工具列表
+      const mcpTools = mcpManager.getAllTools();
+      const tools: ToolDefinition[] = mcpTools.map(t => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.inputSchema,
+      }));
+      logger.info(`可用工具: ${tools.length} 个, agentMode=${!!agentMode}`);
+
+      // Agent 模式校验工作区
+      const useAgent = !!agentMode;
+      if (useAgent && (!workspacePath || !isWorkspaceApproved(workspacePath))) {
+        win.webContents.send('chat:stream-chunk', {
+          type: 'error',
+          error: { message: 'Agent 模式需要先打开一个项目工作区', code: 'NO_WORKSPACE' },
+        });
+        return;
+      }
+
+      // 使用 AgentRunner 替代直接调用 modelRouter
+      const stream = agentRunner.run({
         providerId,
         modelId,
         apiKey: providerConfig.apiKey,
@@ -141,16 +214,33 @@ export function registerChatHandlers(): void {
         temperature,
         maxTokens,
         signal: abortController.signal,
+        agentMode: useAgent,
+        cwd: workspacePath,
+        requestConfirm: useAgent ? makeConfirmer(win.webContents) : undefined,
+        onChunk: () => {}, // 暂不需要
       });
 
       let fullContent = '';
       let thinkingContent = '';
+      let toolTrace = '';
 
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break;
 
         if (chunk.textDelta) fullContent += chunk.textDelta;
         if (chunk.thinkingDelta) thinkingContent += chunk.thinkingDelta;
+
+        // 工具轨迹（用于持久化，纯文本可回放）
+        if (chunk.type === 'tool-call' && chunk.toolCall) {
+          let argSummary = '';
+          try {
+            const args = JSON.parse(chunk.toolCall.arguments || '{}');
+            argSummary = args.command || args.path || chunk.toolCall.arguments.slice(0, 80);
+          } catch { argSummary = chunk.toolCall.arguments.slice(0, 80); }
+          toolTrace += `\n\n🔧 **${chunk.toolCall.name}** \`${argSummary}\``;
+        } else if (chunk.type === 'tool-result' && chunk.toolResult) {
+          toolTrace += chunk.toolResult.success ? ' ✅' : ` ❌ ${chunk.toolResult.output.slice(0, 200)}`;
+        }
 
         win.webContents.send('chat:stream-chunk', chunk);
 
@@ -165,7 +255,10 @@ export function registerChatHandlers(): void {
 
         if (!convId) {
           // 新对话：创建对话 + 保存所有消息
-          const title = (trimmedMessages[trimmedMessages.length - 1]?.content?.slice(0, 50) || '新对话') as string;
+          const lastContent = trimmedMessages[trimmedMessages.length - 1]?.content;
+          const title = (typeof lastContent === 'string' && lastContent.trim())
+            ? lastContent.slice(0, 50)
+            : '新对话';
           convId = uuidv4();
           batch.push({
             sql: 'INSERT INTO conversations (id, title, model_id, provider_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -193,9 +286,12 @@ export function registerChatHandlers(): void {
 
         // 保存助手回复
         const assistantId = uuidv4();
-        const content = thinkingContent
+        const baseContent = thinkingContent
           ? `[思考过程]\n${thinkingContent}\n\n${fullContent}`
           : fullContent;
+        const content = toolTrace
+          ? `${baseContent}\n\n---\n**Agent 执行记录**${toolTrace}`
+          : baseContent;
         batch.push({
           sql: 'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
           params: [assistantId, convId!, 'assistant', content, now],
@@ -230,5 +326,21 @@ export function registerChatHandlers(): void {
       controller.abort();
     }
     activeRequests.clear();
+    // 中断所有待确认的命令
+    for (const [, pending] of pendingConfirmations) {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    }
+    pendingConfirmations.clear();
+  });
+
+  // 渲染进程的命令确认结果
+  ipcMain.on('agent:confirm-response', (_event, payload: { id: string; allowed: boolean }) => {
+    const pending = pendingConfirmations.get(payload?.id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingConfirmations.delete(payload.id);
+      pending.resolve(!!payload.allowed);
+    }
   });
 }

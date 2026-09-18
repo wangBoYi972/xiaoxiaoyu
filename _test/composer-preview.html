@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN" class="theme-light">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Composer UI 验证台</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      window.electronAPI = {
+        workspace: { open: async () => ({ success: true, workspace: null }) },
+        file: { readText: async () => ({ success: false, content: '' }) },
+      };
+    </script>
+    <script type="module" src="./composer-preview.tsx"></script>
+  </body>
+</html>

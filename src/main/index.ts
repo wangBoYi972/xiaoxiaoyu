@@ -7,14 +7,22 @@ import { initDatabase } from './store/database';
 import { logger } from './utils/logger';
 import fs from 'fs';
 import path from 'path';
-import {
-  isOllamaInstalled, checkOllamaRunning, startOllamaServe,
-  openOllamaDownloadPage, pullModel, hasModel, DEFAULT_MODEL,
-  importModelFromBundle, getBundledModelPath,
-} from './ollama/ollama-launcher';
-import { updateOllamaProgress } from './ipc/ollama.ipc';
+import { initializeOllamaInBackground } from './services/ollama-service';
+import { registerAppProtocolScheme, registerAppProtocolHandler } from './window/app-protocol';
 
 const isMac = process.platform === 'darwin';
+
+// 自定义协议 app:// 必须先于 app ready 注册
+registerAppProtocolScheme();
+
+// ===== 全局异常兜底 =====
+// 主进程崩溃会静默杀掉整个应用，这里至少保证异常落到日志里便于排查
+process.on('uncaughtException', (err) => {
+  logger.error('主进程未捕获异常', err instanceof Error ? err : new Error(String(err)));
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('主进程未处理的 Promise 拒绝', reason instanceof Error ? reason : new Error(String(reason)));
+});
 
 // ===== 单实例锁 =====
 // 优先使用 Electron 原生 singleInstanceLock，备选文件锁
@@ -61,6 +69,7 @@ if (!gotTheLock) {
     } catch {}
 
     await initDatabase();
+    registerAppProtocolHandler();
     registerIpcHandlers();
     registerUpdateIpc();
 
@@ -68,7 +77,18 @@ if (!gotTheLock) {
     setupTray(mainWindow);
 
     // 后台自动初始化 Ollama（不阻塞启动）
-    setupOllamaInBackground(mainWindow);
+    initializeOllamaInBackground({
+      progress: (p) => mainWindow.webContents.send('ollama:progress', p),
+      status: (s) => mainWindow.webContents.send('ollama:status', s),
+    });
+
+    // 渲染进程崩溃/无响应时留痕，便于排查
+    mainWindow.webContents.on('render-process-gone', (_e, details) => {
+      logger.error(`渲染进程退出: reason=${details.reason} exitCode=${details.exitCode}`);
+    });
+    mainWindow.webContents.on('unresponsive', () => {
+      logger.warn('渲染进程无响应');
+    });
 
     globalShortcut.register('CommandOrControl+Shift+Space', () => {
       const win = getMainWindow() || BrowserWindow.getAllWindows()[0];
@@ -94,79 +114,4 @@ if (!gotTheLock) {
   app.on('before-quit', () => {
     try { require('./store/database').closeDatabase(); } catch {}
   });
-}
-
-// ===== 后台自动初始化 Ollama =====
-function setupOllamaInBackground(mainWindow: BrowserWindow): void {
-  setTimeout(async () => {
-    try {
-      const send = (ch: string, data: any) => mainWindow.webContents.send(ch, data);
-
-      // 1. 检查 Ollama — 不自动安装，让用户装（GitHub 国内下不动）
-      if (!isOllamaInstalled()) {
-        logger.info('Ollama 未安装');
-        updateOllamaProgress({ active: false });
-        send('ollama:status', { installed: false, running: false, modelReady: false });
-        return; // renderer 会显示"需要安装 Ollama"引导
-      }
-
-      // 2. 启动服务
-      if (!(await checkOllamaRunning())) {
-        logger.info('启动 Ollama 服务...');
-        updateOllamaProgress({ stage: 'starting', message: '正在启动 Ollama 服务...' });
-        send('ollama:progress', { stage: 'starting', message: '正在启动 Ollama 服务...' });
-        startOllamaServe();
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 2000));
-          if (await checkOllamaRunning()) break;
-        }
-      }
-
-      const running = await checkOllamaRunning();
-      if (!running) {
-        updateOllamaProgress({ active: false });
-        send('ollama:status', { installed: true, running: false, modelReady: false });
-        return;
-      }
-
-      logger.info('Ollama 服务已就绪');
-      send('ollama:status', { installed: true, running: true, modelReady: false });
-
-      // 3. 获取模型 — 优先从安装包导入，失败再网络下载
-      let modelReady = await hasModel(DEFAULT_MODEL);
-      if (!modelReady) {
-        // 检查安装包是否内置了模型文件
-        const bundledPath = getBundledModelPath();
-        if (bundledPath) {
-          logger.info(`从安装包导入模型: ${bundledPath}`);
-          updateOllamaProgress({ stage: 'importing', message: '正在从安装包导入 AI 模型...', percent: 0 });
-          send('ollama:progress', { stage: 'importing', message: '正在从安装包导入 AI 模型...', percent: 0 });
-
-          modelReady = await importModelFromBundle((msg, percent) => {
-            updateOllamaProgress({ stage: 'importing', message: msg, percent });
-            send('ollama:progress', { stage: 'importing', message: msg, percent });
-          });
-        }
-
-        // fallback：从网络下载
-        if (!modelReady) {
-          logger.info(`内置模型不可用，从网络下载 ${DEFAULT_MODEL}...`);
-          updateOllamaProgress({ stage: 'pulling', message: '正在下载 qwen2.5 模型（约400MB）...', percent: 0 });
-          send('ollama:progress', { stage: 'pulling', message: '正在下载 qwen2.5 模型（约400MB）...', percent: 0 });
-          await pullModel(DEFAULT_MODEL, (p) => {
-            updateOllamaProgress({ stage: 'pulling', message: p.status, percent: p.percent });
-            send('ollama:progress', { stage: 'pulling', message: p.status, percent: p.percent });
-          });
-          modelReady = await hasModel(DEFAULT_MODEL);
-        }
-      }
-
-      updateOllamaProgress({ active: false, done: true, modelReady: true, percent: 100 });
-      send('ollama:status', { installed: true, running: true, modelReady: true, defaultModel: DEFAULT_MODEL });
-      logger.info('Ollama 初始化完成');
-    } catch (e) {
-      updateOllamaProgress({ active: false });
-      logger.error('Ollama 初始化失败', e as Error);
-    }
-  }, 3000);
 }

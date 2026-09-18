@@ -3,31 +3,23 @@ import { ConfigProvider, theme, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import enUS from 'antd/locale/en_US';
 import { HashRouter, Routes, Route } from 'react-router-dom';
-import { AppLayout } from './components/layout/AppLayout';
+import WorkspaceLayout from './components/workspace/WorkspaceLayout';
 import { LoginPage } from './components/auth/LoginPage';
+import { Wallpaper } from './components/layout/Wallpaper';
 import { useSettingsStore } from './stores/settings-store';
 import { useModelStore } from './stores/model-store';
+import { useAuthStore } from './stores/auth-store';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { AnnouncementModal } from './components/AnnouncementModal';
 
 const isElectron = !!(window as any).electronAPI;
-
-interface AuthUser { id: number; username: string; role: string; }
-
-function getStoredUser(): AuthUser | null {
-  try {
-    if (isElectron) return null;
-    const raw = localStorage.getItem('auth_user');
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
 
 export function App() {
   const { theme: themeMode } = useSettingsStore();
   const { language, fontSize, loadSettings } = useSettingsStore();
   const { loadProviders, setActiveProvider } = useModelStore();
-  const [authUser, setAuthUser] = useState<AuthUser | null>(getStoredUser());
   const [ollamaReady, setOllamaReady] = useState(false);
   const [ollamaSetupProgress, setOllamaSetupProgress] = useState<string>('');
-  const [guestMode, setGuestMode] = useState(false);
 
   // 全局字号应用
   useEffect(() => {
@@ -37,8 +29,8 @@ export function App() {
   useEffect(() => { loadSettings(); }, [loadSettings]);
 
   useEffect(() => {
-    if (authUser || guestMode) loadProviders();
-  }, [authUser, guestMode, loadProviders]);
+    loadProviders();
+  }, [loadProviders]);
 
   // 监听 Ollama 状态（桌面端 IPC）
   useEffect(() => {
@@ -88,18 +80,6 @@ export function App() {
     }).catch(() => {});
   }, [setActiveProvider]);
 
-  // 免登录进入游客模式
-  const handleGuestMode = () => {
-    setGuestMode(true);
-    setActiveProvider('ollama');
-  };
-
-  const handleLogin = (user: AuthUser) => {
-    const key = isElectron ? 'desktop_user' : 'auth_user';
-    localStorage.setItem(key, JSON.stringify(user));
-    setAuthUser(user);
-  };
-
   // 系统主题
   const [systemIsDark, setSystemIsDark] = useState(
     () => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
@@ -112,26 +92,23 @@ export function App() {
   }, []);
 
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemIsDark);
-  useEffect(() => { document.body.classList.toggle('dark-theme', isDark); }, [isDark]);
+
+  // 登录门：账号状态唯一真源在 auth-store（桌面端免登录，Web 端必须登录）
+  const needLogin = useAuthStore(s => s.loginVisible);
+  const signIn = useAuthStore(s => s.signIn);
+  useEffect(() => { useAuthStore.getState().init(); }, []);
+  useEffect(() => {
+    document.body.classList.toggle('dark-theme', isDark);
+    // 玻璃设计系统主题类：glass.css 依此切换两套变量
+    const root = document.documentElement;
+    root.classList.toggle('theme-dark', isDark);
+    root.classList.toggle('theme-light', !isDark);
+    root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    root.style.colorScheme = isDark ? 'dark' : 'light';
+  }, [isDark]);
 
   const algorithm = isDark ? [theme.darkAlgorithm] : [theme.defaultAlgorithm];
   const locale = language === 'en-US' ? enUS : zhCN;
-
-  // 未登录 + 非游客 → 显示登录/注册页
-  if (!authUser && !guestMode) {
-    return (
-      <ConfigProvider locale={locale} theme={{ algorithm, token: { colorPrimary: '#1677ff', colorPrimaryBg: '#e6f4ff', borderRadius: 8, colorTextBase: '#0a2540' } }}>
-        <AntApp>
-          <LoginPage
-            onLogin={handleLogin}
-            ollamaReady={ollamaReady}
-            ollamaSetupProgress={ollamaSetupProgress}
-            onGuestMode={handleGuestMode}
-          />
-        </AntApp>
-      </ConfigProvider>
-    );
-  }
 
   return (
     <ConfigProvider
@@ -139,21 +116,55 @@ export function App() {
       theme={{
         algorithm,
         token: {
-          colorPrimary: '#1677ff',
-          colorPrimaryBg: '#e6f4ff',
-          borderRadius: 8,
+          // —— 与 glass.css 的设计 Token 对齐 ——
+          colorPrimary: isDark ? '#7c9dff' : '#4f7cff',
+          colorInfo: isDark ? '#7c9dff' : '#4f7cff',
+          colorSuccess: isDark ? '#4ade80' : '#22c55e',
+          colorWarning: isDark ? '#fbbf24' : '#f59e0b',
+          colorError: isDark ? '#f87171' : '#ef4444',
+          colorBgBase: isDark ? '#0b0e16' : '#f2f5fb',
+          colorTextBase: isDark ? '#e7ebf3' : '#0f172a',
+          borderRadius: 12,
           fontSize: fontSize,
-          colorTextBase: '#0a2540',
-          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif",
+          fontFamily:
+            "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, sans-serif",
+          // 玻璃浮层：让 antd 弹层本身也半透明，配合 .glass-overlay 类
+          colorBgElevated: isDark ? 'rgba(20, 23, 33, 0.86)' : 'rgba(255, 255, 255, 0.86)',
+          boxShadowSecondary: isDark
+            ? '0 18px 56px rgba(0, 0, 0, 0.46)'
+            : '0 18px 56px rgba(30, 41, 59, 0.18)',
+          controlHeight: 34,
+        },
+        components: {
+          Modal: {
+            contentBg: 'transparent',
+            headerBg: 'transparent',
+          },
+          Drawer: { colorBgElevated: 'transparent' },
+          Card: { borderRadiusLG: 16 },
+          Button: { borderRadius: 10, borderRadiusLG: 12 },
         },
       }}
     >
       <AntApp>
-        <HashRouter>
-          <Routes>
-            <Route path="/*" element={<AppLayout />} />
-          </Routes>
-        </HashRouter>
+        {/* 壁纸层（最底层，所有玻璃面板透出它） */}
+        <Wallpaper />
+        <div className="app-layer">
+          <AnnouncementModal />
+          {needLogin ? (
+            <LoginPage
+              onLogin={signIn}
+            />
+          ) : (
+            <ErrorBoundary>
+              <HashRouter>
+                <Routes>
+                  <Route path="/*" element={<WorkspaceLayout />} />
+                </Routes>
+              </HashRouter>
+            </ErrorBoundary>
+          )}
+        </div>
       </AntApp>
     </ConfigProvider>
   );

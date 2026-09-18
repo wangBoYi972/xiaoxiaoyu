@@ -1,17 +1,76 @@
 // API 传输层接口定义
-// 所有 36 个方法签名，对应 preload/index.ts 中的 electronAPI
+// 所有方法签名，对应 preload/index.ts 中的 electronAPI（桌面端）与 /api/* 路由（Web 端）
 
 import type { ImageAttachment } from '../renderer/stores/chat-store';
+import type { FileNode } from '../renderer/stores/workspace-store';
 
 export interface StreamChunk {
-  type: 'text-delta' | 'thinking-delta' | 'tool-call' | 'done' | 'error';
+  type: 'text-delta' | 'thinking-delta' | 'tool-call' | 'tool-result' | 'done' | 'error';
   textDelta?: string;
   thinkingDelta?: string;
   toolCall?: { id: string; name: string; arguments: string };
+  /** Agent 工具执行结果（type === 'tool-result'） */
+  toolResult?: { id: string; name: string; success: boolean; output: string };
   doneReason?: 'stop' | 'length' | 'error';
   usage?: { inputTokens: number; outputTokens: number };
   error?: { message: string; code?: string };
 }
+
+/** Agent 执行命令前的确认请求（渲染层弹窗 → 回传 allowed） */
+export interface AgentConfirmRequest {
+  id: string;
+  title: string;
+  detail: string;
+}
+
+// ========== 认证 ==========
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  email?: string;
+  role: string;
+}
+
+export interface AuthResult {
+  ok: boolean;
+  error?: string;
+  /** 机器可读的错误码，例如 SMTP_NOT_CONFIGURED */
+  code?: string;
+  message?: string;
+  user?: AuthUser;
+  /** 仅 Web 端返回 */
+  token?: string;
+}
+
+export type MailPurpose = 'register' | 'reset';
+
+export interface SmtpStatus {
+  configured: boolean;
+  smtpUser?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+}
+
+/** 工作区（本地文件系统）能力；Web 端为降级实现 */
+export interface OpenedWorkspace {
+  path: string;
+  name: string;
+  fileTree: FileNode[];
+}
+
+export interface WorkspaceTransport {
+  /** 打开目录选择框；取消返回 null */
+  open(): Promise<OpenedWorkspace | null>;
+  close(workspacePath?: string): Promise<void>;
+  getFileTree(workspacePath: string): Promise<FileNode[]>;
+  /** 强制刷新文件树（绕过缓存） */
+  refresh(workspacePath: string): Promise<FileNode[]>;
+  /** 懒加载展开某个目录 */
+  expandDir(dirPath: string): Promise<FileNode[]>;
+  onFileChange(callback: (event: { type: string; path: string }) => void): () => void;
+}
+
 
 export interface Conversation {
   id: string;
@@ -128,9 +187,22 @@ export interface ApiTransport {
     temperature?: number;
     maxTokens?: number;
     conversationId?: string;
+    /** Agent 模式：注入内置工具（读写文件 / 执行命令 / 搜索） */
+    agentMode?: boolean;
+    /** Agent 工作区根目录（沙箱边界，必填于 agentMode） */
+    workspacePath?: string;
   }): Promise<void>;
   stopGeneration(): void;
   onStreamChunk(callback: (chunk: StreamChunk) => void): () => void;
+
+  // ========== Agent ==========
+  /** 监听主进程发来的命令确认请求（桌面端） */
+  onAgentConfirmRequest(callback: (req: AgentConfirmRequest) => void): () => void;
+  /** 回传用户是否允许执行该命令 */
+  respondAgentConfirm(id: string, allowed: boolean): void;
+
+  // ========== Workspace ==========
+  workspace: WorkspaceTransport;
 
   // ========== Conversations ==========
   listConversations(): Promise<Conversation[]>;
@@ -182,9 +254,25 @@ export interface ApiTransport {
   markAnnouncementRead(id: string): Promise<void>;
   showAnnouncements(): Promise<void>;
 
-  // ========== Auth ==========
-  authLogin?(username: string, password: string): Promise<{ ok: boolean; error?: string; user?: { id: number; username: string; role: string } }>;
-  authRegister?(username: string, password: string): Promise<{ ok: boolean; error?: string; user?: { id: number; username: string; role: string } }>;
+  // ========== Auth（桌面端走 IPC，Web 端走 /api/auth/*） ==========
+  /** 邮箱 + 密码登录 */
+  authLogin(data: { username: string; password: string }): Promise<AuthResult>;
+  /** QQ 邮箱注册（需邮箱验证码） */
+  authRegister(data: { username: string; password: string; code?: string }): Promise<AuthResult>;
+  /** 发送邮箱验证码 */
+  sendVerificationCode(email: string, purpose?: MailPurpose): Promise<AuthResult>;
+  /** 邮箱验证码重置密码 */
+  resetPassword(data: { email: string; code: string; newPassword: string }): Promise<AuthResult>;
+  /** 发件邮箱（SMTP）配置状态 */
+  getSmtpStatus(): Promise<SmtpStatus>;
+  /** 保存 SMTP 配置（仅桌面端实现，Web 端走设置接口） */
+  setSmtpConfig(cfg: { user?: string; pass?: string; host?: string; port?: number }): Promise<AuthResult>;
+  /** 注册模式：库里还没有账号时，首个注册免验证码（自动成为管理员） */
+  getRegistrationMode(): Promise<{ firstAccount: boolean }>;
+  /** 通用 IPC 直通（桌面端仅允许 finetune: 前缀的通道） */
+  invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
+  /** Web 端：退出登录（清除本地 token） */
+  logout?(): void;
 
   // ========== Skills ==========
   listSkills(): Promise<SkillItem[]>;

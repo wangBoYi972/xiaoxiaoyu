@@ -141,8 +141,7 @@ export function SkillsSettings() {
         <Row gutter={[12, 12]}>
           {filtered.map((s) => (
             <Col span={12} key={s.id}>
-              <Card size="small" className="settings-card"
-                style={{ borderRadius: 14, border: '1px solid rgba(0,0,0,0.06)' }}
+              <Card size="small" className="glass-card"
                 styles={{ body: { padding: '14px 16px' } }}
               >
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>

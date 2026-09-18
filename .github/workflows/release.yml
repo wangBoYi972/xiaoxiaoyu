@@ -1,0 +1,58 @@
+name: 打包并发布 Windows 安装包
+
+# 用法：把版本号写进 package.json 的 version，提交后打标签推上去即可
+#   git tag v3.1.0 && git push origin v3.1.0
+# 也可以在 GitHub 网页 → Actions → 本工作流 → Run workflow 手动触发
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: 构建渲染层
+        run: npm run build:renderer
+
+      - name: 构建主进程
+        # 项目存在历史类型告警，这里不让 tsc 的退出码中断打包
+        run: npx tsc -p tsconfig.main.json || echo "tsc 有类型告警，继续打包"
+
+      - name: 打包安装包
+        run: npx electron-builder --win --x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # 不配这个，app-builder 会去 GitHub 拉 winCodeSign，国内/偶发会卡死
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+
+      - name: 生成校验值
+        shell: bash
+        run: |
+          cd release
+          ls -l *.exe
+          sha256sum *.exe > sha256.txt
+          cat sha256.txt
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+            release/sha256.txt
+          generate_release_notes: true

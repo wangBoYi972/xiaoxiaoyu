@@ -28,13 +28,26 @@ export class OpenAICompatAdapter extends BaseModelAdapter {
     };
   }
 
+  /**
+   * 测试连接用的模型：优先用供应商配置的模型（models_json），
+   * 其次用预设列表，最后才回退。
+   * ⚠️ 原来固定写死 'deepseek-chat'：自定义中转站没这个模型会被判"连接失败"，
+   *    明明 Key 和地址都对（2026-09-20 solidapi 踩到）。
+   */
+  protected get testModel(): string {
+    return (this.config as any)?.models?.[0]?.id
+      || (this.config as any)?.models?.[0]
+      || this.defaultModels[0]?.id
+      || 'deepseek-chat';
+  }
+
   async validateApiKey(): Promise<boolean> {
     try {
       const testResp = await this.simpleFetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: this.buildHeaders(),
         body: JSON.stringify({
-          model: this.defaultModels[0]?.id || 'deepseek-chat',
+          model: this.testModel,
           messages: [{ role: 'user', content: 'hi' }],
           max_tokens: 1,
         }),
@@ -110,11 +123,29 @@ export class OpenAICompatAdapter extends BaseModelAdapter {
         options.signal
       );
 
+      // 统计真正解析成功的 SSE 数据条数：一条都没有 = 接口返回的不是聊天流
+      // （典型：API 地址少写 /v1，站点返回 200 + HTML 首页 → 旧版会静默给个空回复）
+      let parsedCount = 0;
+
       for await (const data of this.readSSEStream(response)) {
         if (options.signal?.aborted) break;
 
         try {
           const parsed = JSON.parse(data);
+          parsedCount++;
+          // 有些网关错误体也带 choices，用 error 字段兜底判断
+          if (parsed?.error) {
+            yield {
+              type: 'error',
+              error: {
+                message: typeof parsed.error === 'string'
+                  ? parsed.error
+                  : (parsed.error.message || JSON.stringify(parsed.error)),
+                code: 'API_ERROR',
+              },
+            };
+            return;
+          }
           const choice = parsed.choices?.[0];
 
           if (!choice) continue;
@@ -163,6 +194,19 @@ export class OpenAICompatAdapter extends BaseModelAdapter {
         }
       }
 
+      // 一条 SSE 数据都没解析出来 → 地址大概率不对（返回的是网页/空响应），
+      // 直接报错，不要再静默 done（旧行为表现为"有气泡但空回复"）
+      if (parsedCount === 0) {
+        yield {
+          type: 'error',
+          error: {
+            message: `接口没有返回任何聊天数据。请检查 API 地址是否完整（常见：末尾漏了 /v1，例如应为 https://example.com/v1）。当前请求地址：${this.baseUrl}/chat/completions`,
+            code: 'EMPTY_STREAM',
+          },
+        };
+        return;
+      }
+
       // 流结束但没有 finish_reason
       yield { type: 'done', doneReason: 'stop' };
     } catch (error) {
@@ -177,14 +221,39 @@ export class OpenAICompatAdapter extends BaseModelAdapter {
     }
   }
 
-  private buildMessages(options: ChatRequestOptions): Array<{ role: string; content: unknown }> {
-    const messages: Array<{ role: string; content: unknown }> = [];
+  private buildMessages(options: ChatRequestOptions): Array<Record<string, unknown>> {
+    const messages: Array<Record<string, unknown>> = [];
 
     if (options.systemPrompt) {
       messages.push({ role: 'system', content: options.systemPrompt });
     }
 
     for (const msg of options.messages) {
+      // 工具结果消息 → role: tool
+      if (msg.role === 'tool') {
+        messages.push({
+          role: 'tool',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+          tool_call_id: msg.toolCallId,
+        });
+        continue;
+      }
+
+      // assistant 消息带工具调用
+      if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+        const assistantMsg: Record<string, unknown> = {
+          role: 'assistant',
+          content: typeof msg.content === 'string' ? (msg.content || null) : msg.content,
+          tool_calls: msg.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        };
+        messages.push(assistantMsg);
+        continue;
+      }
+
       messages.push({ role: msg.role, content: msg.content });
     }
 

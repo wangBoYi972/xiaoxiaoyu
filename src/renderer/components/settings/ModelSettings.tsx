@@ -3,16 +3,34 @@ import React, { useState } from 'react';
 import { Switch, Button, Tag, Space, message, Typography, Card, Badge } from 'antd';
 import {
   ApiOutlined, EditOutlined, ThunderboltOutlined, CheckCircleFilled,
-  CloseCircleFilled, QuestionCircleFilled,
+  CloseCircleFilled, QuestionCircleFilled, PlusOutlined, DeleteOutlined,
 } from '@ant-design/icons';
 import { useModelStore } from '../../stores/model-store';
 import { ProviderConfigModal } from './ProviderConfigModal';
+import { CustomProviderModal, type CustomProviderInput } from './CustomProviderModal';
 
 const { Text } = Typography;
 
 export function ModelSettings() {
-  const { providers, saveProvider, refreshModels } = useModelStore();
+  const { providers, saveProvider, refreshModels, addCustomProvider, removeCustomProvider } = useModelStore();
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const handleCreate = async (input: CustomProviderInput) => {
+    const id = await addCustomProvider(input);
+    setCreating(false);
+    message.success(`已添加「${input.name}」，可在输入框左上角直接切换`);
+    // 顺手测一下连通性
+    try {
+      const ok = await api.testProvider(id);
+      message[ok ? 'success' : 'warning']({ content: ok ? '连接测试通过' : '连接测试未通过，请检查地址与 Key' });
+    } catch { /* ignore */ }
+  };
+
+  const handleRemove = async (id: string, name: string) => {
+    await removeCustomProvider(id);
+    message.success(`已删除「${name}」`);
+  };
 
   const handleToggle = async (id: string, enabled: boolean) => {
     const p = providers.find((x) => x.id === id);
@@ -50,31 +68,14 @@ export function ModelSettings() {
           key={p.id}
           size="small"
           hoverable
-          className="settings-card"
-          style={{
-            marginBottom: 10,
-            borderRadius: 14,
-            border: p.enabled ? '1px solid rgba(22,119,255,0.2)' : '1px solid rgba(0,0,0,0.06)',
-            background: p.enabled ? 'rgba(22,119,255,0.03)' : 'rgba(255,255,255,0.4)',
-            backdropFilter: 'blur(10px)',
-            WebkitBackdropFilter: 'blur(10px)',
-            transition: 'all 0.2s ease',
-          }}
+          className={`glass-card ${p.enabled ? 'is-on' : ''}`}
+          style={{ marginBottom: 10 }}
           styles={{ body: { padding: '14px 18px' } }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             {/* 左侧：图标 + 名称 + 状态 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
-              <div style={{
-                width: 40, height: 40, borderRadius: 12,
-                background: p.enabled
-                  ? 'linear-gradient(135deg, rgba(22,119,255,0.15), rgba(114,46,209,0.15))'
-                  : 'rgba(0,0,0,0.04)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 20,
-                color: p.enabled ? '#1677ff' : '#999',
-                flexShrink: 0,
-              }}>
+              <div className={`glass-card-icon ${p.enabled ? '' : 'is-off'}`}>
                 <ApiOutlined />
               </div>
               <div style={{ minWidth: 0 }}>
@@ -121,10 +122,37 @@ export function ModelSettings() {
               >
                 配置
               </Button>
+              {p.custom && (
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => handleRemove(p.id, p.name)}
+                  style={{ borderRadius: 8, fontSize: 12 }}
+                >
+                  删除
+                </Button>
+              )}
             </Space>
           </div>
         </Card>
       ))}
+
+      <Button
+        block
+        icon={<PlusOutlined />}
+        onClick={() => setCreating(true)}
+        style={{ borderRadius: 10, fontWeight: 500, marginTop: 6 }}
+      >
+        新增自定义供应商（任意 OpenAI 兼容端点）
+      </Button>
+
+      <CustomProviderModal
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreate={handleCreate}
+      />
 
       {editingConfig && (
         <ProviderConfigModal

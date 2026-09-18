@@ -1,6 +1,6 @@
 {
   "name": "xiaoxiaoyu",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "小小榆 - 多模型AI桌面助手",
   "main": "dist/main/index.js",
   "scripts": {
@@ -23,7 +23,9 @@
     "server:start": "node dist/server/server/index.js",
     "web:dev": "concurrently \"npm run dev:vite\" \"npm run server:dev\"",
     "web:build": "npm run build:renderer && npm run server:build",
-    "web:start": "npm run server:start"
+    "web:start": "npm run server:start",
+    "test": "npm run test:smoke",
+    "test:smoke": "tsx _test/auth-smoke.mts && node _test/agent-tools-sandbox.cjs && node _test/file-ipc-sandbox.cjs && node _test/crypto-smoke.cjs && node _test/openai-compat-check.cjs && tsx _test/log-and-guard-smoke.mts"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.0",
@@ -33,6 +35,7 @@
     "express": "^5.2.1",
     "highlight.js": "^11.10.0",
     "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.0.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.0",
@@ -42,17 +45,21 @@
     "sql.js": "^1.11.0",
     "ssh2": "^1.17.0",
     "svg-captcha": "^1.4.0",
-    "uuid": "^10.0.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "concurrently": "^9.1.0",
     "electron": "^33.4.11",
     "electron-builder": "^25.1.0",
+    "monaco-editor": "^0.56.0",
     "tsx": "^4.23.0",
     "typescript": "^5.6.0",
     "vite": "^6.0.0",
@@ -62,6 +69,7 @@
     "appId": "com.xiaoxiaoyu.desktop",
     "productName": "小小榆",
     "copyright": "Copyright 2025",
+    "afterPack": "scripts/patch-win-exe.cjs",
     "directories": {
       "output": "release",
       "buildResources": "resources"

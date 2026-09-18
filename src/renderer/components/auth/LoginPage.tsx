@@ -1,9 +1,11 @@
 // 登录/注册页面 — 深海鱼主题 · 高级质感 · 大厂风格
+// 认证方式：QQ 邮箱 + 密码登录 / QQ 邮箱 + 邮箱验证码注册 / 邮箱验证码重置密码
 import api from '../../../api';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Input, Card, Typography, message, Space, Tabs, Checkbox, Select, Tooltip, Modal, Progress, Tag } from 'antd';
+import type { AuthResult } from '../../../api/transport';
+import React, { useState, useEffect, useRef } from 'react';
+import { Button, Input, Card, Typography, message, Space, Tabs, Checkbox, Select, Tooltip, Modal, Progress, Tag, Alert } from 'antd';
 import {
-  UserOutlined, LockOutlined, SafetyCertificateOutlined,
+  MailOutlined, LockOutlined, SafetyCertificateOutlined,
   MinusOutlined, BorderOutlined, CloseOutlined,
   TranslationOutlined, FontSizeOutlined,
 } from '@ant-design/icons';
@@ -14,11 +16,18 @@ const isElectron = !!(window as any).electronAPI;
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
 const isMobile = window.innerWidth < 768;
 
+/** QQ 邮箱：QQ 号 5-11 位、不以 0 开头（与后端 shared/email-code.ts 保持一致） */
+const QQ_EMAIL_RE = /^[1-9]\d{4,10}@qq\.com$/i;
+const isQQEmail = (v: string) => QQ_EMAIL_RE.test((v || '').trim());
+/** 登录账号：QQ 邮箱或历史用户名（如初始管理员 admin） */
+const isValidLoginAccount = (v: string) => {
+  const t = (v || '').trim();
+  if (!t) return false;
+  return t.includes('@') ? isQQEmail(t) : /^[a-zA-Z0-9_-]{3,32}$/.test(t);
+};
+
 interface LoginPageProps {
   onLogin: (user: { id: number; username: string; role: string }) => void;
-  ollamaReady?: boolean;
-  ollamaSetupProgress?: string;
-  onGuestMode?: () => void;
 }
 
 // 记住登录态 — 只存储认证 token 而非密码明文
@@ -102,42 +111,48 @@ function WinBtn({ icon, color, hoverColor, onClick, title }: {
 }
 
 // ============ 主组件 ============
-export function LoginPage({ onLogin, ollamaReady, ollamaSetupProgress, onGuestMode }: LoginPageProps) {
-  const [tab, setTab] = useState<'login' | 'register'>('login');
-  const [username, setUsername] = useState('');
+export function LoginPage({ onLogin }: LoginPageProps) {
+  const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [code, setCode] = useState('');
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [captchaKey, setCaptchaKey] = useState('');
-  const [captchaSvg, setCaptchaSvg] = useState('');
-  const [captchaCode, setCaptchaCode] = useState('');
+  const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+  const [smtpConfigured, setSmtpConfigured] = useState<boolean | null>(null);
+  /** 首账号引导：还没有任何账号时，首个注册免验证码并自动成为管理员 */
+  const [firstAccount, setFirstAccount] = useState(false);
 
   const { language, fontSize, setLanguage, setFontSize, loadSettings } = useSettingsStore();
 
   useEffect(() => { loadSettings().catch(() => {}); }, [loadSettings]);
   useEffect(() => {
     const saved = getRemembered();
-    if (saved) { setUsername(saved.username); setPassword(saved.password); setRemember(true); }
+    if (saved) { setEmail(saved.username); setPassword(saved.password); setRemember(true); }
   }, []);
 
-  const captchaUrlRef = useRef<string>('');
-
-  const refreshCaptcha = useCallback(async () => {
-    try {
-      const res = await fetch('/api/captcha');
-      const data = await res.json();
-      setCaptchaKey(data.key);
-      // 清理旧的 Blob URL 避免内存泄漏
-      if (captchaUrlRef.current) URL.revokeObjectURL(captchaUrlRef.current);
-      const blob = new Blob([data.svg], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-      captchaUrlRef.current = url;
-      setCaptchaSvg(url);
-      setCaptchaCode('');
-    } catch { /* 验证码加载失败不阻塞 */ }
+  // 发件邮箱是否已配置：没配就发不出验证码，提前提示而不是等报错
+  useEffect(() => {
+    api.getSmtpStatus?.()
+      .then(s => setSmtpConfigured(!!s?.configured))
+      .catch(() => setSmtpConfigured(null));
   }, []);
 
-  useEffect(() => { if (!isElectron) refreshCaptcha(); }, [tab, refreshCaptcha]);
+  // 是否处于「首账号引导」状态
+  useEffect(() => {
+    api.getRegistrationMode?.()
+      .then(m => setFirstAccount(!!m?.firstAccount))
+      .catch(() => {});
+  }, []);
+
+  // 60 秒重发倒计时
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => setCountdown(c => (c <= 1 ? 0 : c - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
 
   // ====== Ollama 本地模型弹窗（登录页 + 聊天页双监听） ======
   const [ollamaModal, setOllamaModal] = useState(false);
@@ -202,39 +217,86 @@ export function LoginPage({ onLogin, ollamaReady, ollamaSetupProgress, onGuestMo
     };
   }, []);
 
+  const switchMode = (next: 'login' | 'register' | 'reset') => {
+    setMode(next);
+    setCode('');
+    setConfirmPassword('');
+  };
+
+  /** 发送邮箱验证码（注册 / 重置密码共用） */
+  const handleSendCode = async () => {
+    const addr = email.trim();
+    if (!isQQEmail(addr)) {
+      message.warning('请输入正确的 QQ 邮箱（例如 123456789@qq.com）');
+      return;
+    }
+    setSending(true);
+    try {
+      const res = await api.sendVerificationCode(addr, mode === 'reset' ? 'reset' : 'register');
+      if (res?.ok) {
+        message.success(res.message || '验证码已发送，请查收 QQ 邮箱');
+        setCountdown(60);
+      } else {
+        message.error(res?.error || '验证码发送失败');
+        if (res?.code === 'SMTP_NOT_CONFIGURED') setSmtpConfigured(false);
+      }
+    } catch {
+      message.error('验证码发送失败，请稍后再试');
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!username.trim() || !password.trim()) { message.warning('请填写用户名和密码'); return; }
-    if (!isElectron && tab === 'register' && !captchaCode.trim()) { message.warning('请输入验证码'); return; }
+    const addr = email.trim();
+    if (!addr || !password.trim()) { message.warning('请填写账号和密码'); return; }
+    if (!isValidLoginAccount(addr)) { message.warning('账号格式不正确（QQ 邮箱或用户名）'); return; }
+
+    if (mode !== 'login') {
+      if (password.length < 6) { message.warning('密码至少 6 位'); return; }
+      if (password !== confirmPassword) { message.warning('两次输入的密码不一致'); return; }
+      if ((mode === 'reset' || !firstAccount) && !code.trim()) { message.warning('请输入邮箱验证码'); return; }
+    }
+
     setLoading(true);
     try {
-      if (isElectron) {
-        const result = tab === 'login'
-          ? await (window as any).electronAPI.authLogin({ username: username.trim(), password: password.trim() })
-          : await (window as any).electronAPI.authRegister({ username: username.trim(), password: password.trim() });
-        if (result.ok && result.user) {
-          if (remember) saveRemembered(username, password); else clearRemembered();
-          localStorage.setItem('desktop_user', JSON.stringify(result.user));
-          message.success(tab === 'login' ? '🐟 欢迎回来！' : '🐟 注册成功！');
-          setTimeout(() => onLogin(result.user), 500);
-        } else { message.error(result.error || '操作失败'); if (tab === 'register') { refreshCaptcha(); setCaptchaCode(''); } }
-      } else {
-        const body: any = { username: username.trim(), password: password.trim() };
-        if (tab === 'register') { body.captchaKey = captchaKey; body.captchaCode = captchaCode.trim(); }
-        const res = await fetch(`/api/auth/${tab === 'login' ? 'login' : 'register'}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (res.ok && data.token) {
-          if (remember) saveRemembered(username, password); else clearRemembered();
-          localStorage.setItem('auth_token', data.token);
-          localStorage.setItem('auth_user', JSON.stringify(data.user));
-          message.success(tab === 'login' ? '🐟 欢迎回来！' : '🐟 注册成功！');
-          setTimeout(() => onLogin(data.user), 500);
-        } else { message.error(data.error || '操作失败'); if (tab === 'register') { refreshCaptcha(); setCaptchaCode(''); } }
+      const res: AuthResult = mode === 'login'
+        ? await api.authLogin({ username: addr, password })
+        : mode === 'register'
+          ? await api.authRegister({ username: addr, password, code: firstAccount && !code.trim() ? undefined : code.trim() })
+          : await api.resetPassword({ email: addr, code: code.trim(), newPassword: password });
+
+      if (!res?.ok) {
+        message.error(res?.error || '操作失败');
+        return;
       }
-    } catch { message.error(isElectron ? '操作失败' : '连接服务器失败'); }
-    finally { setLoading(false); }
+
+      // 重置密码：不登录，回到登录页
+      if (mode === 'reset') {
+        message.success(res.message || '密码已重置，请使用新密码登录');
+        setCode('');
+        setPassword('');
+        setConfirmPassword('');
+        setMode('login');
+        return;
+      }
+
+      const user = res.user;
+      if (!user) { message.error('服务端未返回用户信息'); return; }
+
+      if (remember) saveRemembered(addr, password); else clearRemembered();
+      // Web 端 transport 已写入 auth_token，这里补一份兼容旧读取方
+      if (res.token) localStorage.setItem('auth_token', res.token);
+      localStorage.setItem('auth_user', JSON.stringify(user));
+      if (isElectron) localStorage.setItem('desktop_user', JSON.stringify(user));
+
+      message.success(mode === 'login' ? '🐟 欢迎回来！' : '🐟 注册成功！');
+      setTimeout(() => onLogin(user), 400);
+    } catch {
+      message.error('连接服务器失败，请检查网络后重试');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const isDark = document.body.classList.contains('dark-theme');
@@ -331,125 +393,131 @@ export function LoginPage({ onLogin, ollamaReady, ollamaSetupProgress, onGuestMo
         )}
         {!isElectron && (
           <div style={{ marginBottom: 20 }}>
-            <Title level={4} style={{ margin: 0, color: isDark ? '#e8f4f8' : '#0a2540', fontWeight: 700 }}>{tab === 'login' ? '欢迎回来' : '创建账号'}</Title>
-            <Text style={{ color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(10,37,64,0.4)', fontSize: 13 }}>{tab === 'login' ? '潜入深蓝，继续你的探索' : '加入我们，探索 AI 的无限可能'}</Text>
+            <Title level={4} style={{ margin: 0, color: isDark ? '#e8f4f8' : '#0a2540', fontWeight: 700 }}>
+              {mode === 'login' ? '欢迎回来' : mode === 'register' ? '创建账号' : '重置密码'}
+            </Title>
+            <Text style={{ color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(10,37,64,0.4)', fontSize: 13 }}>
+              {mode === 'login' ? '潜入深蓝，继续你的探索'
+                : mode === 'register' ? '用 QQ 邮箱注册，加入我们探索 AI 的无限可能'
+                  : '验证码将发送到你的 QQ 邮箱'}
+            </Text>
           </div>
         )}
 
-        {/* 本地免登录入口（Ollama 已就绪） */}
-        {isElectron && (ollamaReady || ollamaSetupProgress) && (
-          <div style={{
-            marginBottom: 16, padding: 14, borderRadius: 14,
-            background: ollamaReady
-              ? 'linear-gradient(135deg, rgba(82,196,26,0.1), rgba(22,119,255,0.08))'
-              : 'rgba(250,173,20,0.06)',
-            border: '1px solid ' + (ollamaReady ? 'rgba(82,196,26,0.25)' : 'rgba(250,173,20,0.2)'),
-          }}>
-            {ollamaReady ? (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <span style={{ fontSize: 20 }}>🐟</span>
-                  <Text strong style={{ color: isDark ? '#e8f4f8' : '#0a2540', fontSize: 14 }}>本地 AI 已就绪</Text>
-                </div>
-                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
-                  本地 Ollama + qwen2.5 模型，无需注册 · 完全离线 · 永久免费
-                </Text>
-                <Button type="primary" block size="large" onClick={onGuestMode}
-                  style={{
-                    borderRadius: 12, height: 44, fontSize: 15, fontWeight: 600,
-                    background: 'linear-gradient(135deg, #52c41a, #1677ff)', border: 'none',
-                    boxShadow: '0 4px 16px rgba(82,196,26,0.3)',
-                  }}>
-                  🚀 免登录 · 直接使用
-                </Button>
-              </>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 24, height: 24, borderRadius: 12,
-                  border: '3px solid rgba(250,173,20,0.3)',
-                  borderTopColor: '#faad14',
-                  animation: 'spin 1s linear infinite',
-                }} />
-                <Text style={{ color: '#d48806', fontSize: 13, fontWeight: 500 }}>
-                  {ollamaSetupProgress || '正在准备本地 AI...'}
-                </Text>
-              </div>
-            )}
-          </div>
+        {/* 登录 / 注册 切换（重置密码模式隐藏） */}
+        {mode === 'reset' ? (
+          <div style={{ marginBottom: 18 }} />
+        ) : (
+          <Tabs activeKey={mode} onChange={(k) => switchMode(k as 'login' | 'register')}
+            centered size="small"
+            items={[{ key: 'login', label: '登录' }, { key: 'register', label: '注册' }]}
+            style={{ marginBottom: 20 }}
+            tabBarStyle={{ borderBottom: '1px solid ' + (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(10,37,64,0.06)') }} />
         )}
 
-        {/* 登录 / 注册 切换 */}
-        <Tabs activeKey={tab} onChange={(k) => { setTab(k as 'login' | 'register'); setCaptchaCode(''); if (!isElectron) refreshCaptcha(); }}
-          centered size="small"
-          items={[{ key: 'login', label: '登录' }, { key: 'register', label: '注册' }]}
-          style={{ marginBottom: 20 }}
-          tabBarStyle={{ borderBottom: '1px solid ' + (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(10,37,64,0.06)') }} />
+        {/* 服务端未配置发件邮箱时，注册/重置走不通，提前告知 */}
+        {mode !== 'login' && smtpConfigured === false && (
+          <Alert
+            type="warning" showIcon style={{ marginBottom: 14, borderRadius: 12, textAlign: 'left' }}
+            message="发件邮箱未配置"
+            description="当前服务端还没有配置 QQ 邮箱 SMTP，暂时无法发送验证码。请先配置 smtp_user / smtp_pass。"
+          />
+        )}
 
         <Space direction="vertical" style={{ width: '100%' }} size={14}>
-          {/* 用户名 — 标准 antd Input */}
+          {/* QQ 邮箱 */}
           <Input
-            prefix={<UserOutlined style={{ color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }} />}
-            placeholder="用户名"
-            value={username}
-            onChange={e => setUsername(e.target.value)}
+            prefix={<MailOutlined style={{ color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }} />}
+            placeholder="QQ 邮箱或用户名"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
             size="large"
             style={inputStyle}
             allowClear
+            autoComplete="username"
           />
 
-          {/* 密码 — 标准 antd Input.Password */}
+          {/* 密码 / 新密码 */}
           <Input.Password
             prefix={<LockOutlined style={{ color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }} />}
-            placeholder="密码"
+            placeholder={mode === 'login' ? '密码' : '密码（至少 6 位）'}
             value={password}
             onChange={e => setPassword(e.target.value)}
-            onPressEnter={handleSubmit}
+            onPressEnter={mode === 'login' ? handleSubmit : undefined}
             size="large"
             style={inputStyle}
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
           />
 
-          {/* 验证码 — 仅 Web 注册时 */}
-          {!isElectron && tab === 'register' && (
+          {/* 确认密码 — 注册 / 重置 */}
+          {mode !== 'login' && (
+            <Input.Password
+              prefix={<LockOutlined style={{ color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }} />}
+              placeholder="确认密码"
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              size="large"
+              style={inputStyle}
+              autoComplete="new-password"
+            />
+          )}
+
+          {/* 首账号引导提示 */}
+          {mode === 'register' && firstAccount && (
+            <Alert
+              type="info" showIcon style={{ marginBottom: 14, borderRadius: 12, textAlign: 'left' }}
+              message="首次使用 · 初始化管理员账号"
+              description="检测到还没有任何账号：现在注册的账号将自动成为管理员，无需邮箱验证码。"
+            />
+          )}
+
+          {/* 邮箱验证码 — 注册（非首账号）/ 重置 */}
+          {(mode === 'reset' || (mode === 'register' && !firstAccount)) && (
             <div style={{ display: 'flex', gap: 10 }}>
               <Input
                 prefix={<SafetyCertificateOutlined style={{ color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }} />}
-                placeholder="验证码（数学题答案）"
-                value={captchaCode}
-                onChange={e => setCaptchaCode(e.target.value)}
+                placeholder="邮箱验证码（6 位数字）"
+                value={code}
+                onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 onPressEnter={handleSubmit}
                 size="large"
                 style={{ ...inputStyle, flex: 1 }}
+                maxLength={6}
               />
-              <div onClick={refreshCaptcha} title="看不清？点击刷新"
+              <Button size="large" onClick={handleSendCode} loading={sending} disabled={countdown > 0}
                 style={{
-                  cursor: 'pointer', flexShrink: 0, borderRadius: 14, overflow: 'hidden',
-                  border: '1px solid ' + (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(10,37,64,0.1)'),
-                  width: 100, height: 46, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: isDark ? 'rgba(255,255,255,0.04)' : '#fafafa',
+                  borderRadius: 14, height: 46, flexShrink: 0, minWidth: 116, fontSize: 13, fontWeight: 500,
+                  background: countdown > 0 ? undefined : (isDark ? 'rgba(22,119,255,0.14)' : 'rgba(22,119,255,0.08)'),
+                  borderColor: isDark ? 'rgba(22,119,255,0.35)' : 'rgba(22,119,255,0.25)',
+                  color: countdown > 0 ? undefined : '#1677ff',
                 }}>
-                {captchaSvg ? <img src={captchaSvg} alt="验证码" style={{ width: '100%', height: '100%' }} /> : <Text style={{ fontSize: 11, color: '#999' }}>点击刷新</Text>}
-              </div>
+                {countdown > 0 ? `${countdown} 秒后重发` : (sending ? '发送中' : '获取验证码')}
+              </Button>
             </div>
           )}
 
-          {/* 记住密码 */}
+          {/* 记住密码 / 忘记密码 */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Checkbox checked={remember} onChange={e => setRemember(e.target.checked)}>
               <Text style={{ fontSize: 13, color: isDark ? 'rgba(255,255,255,0.5)' : 'rgba(10,37,64,0.5)' }}>记住密码</Text>
             </Checkbox>
-            <Text style={{ fontSize: 13, color: '#1677ff', cursor: 'pointer', fontWeight: 500 }} onClick={() => message.info('如需重置密码请联系管理员')}>忘记密码？</Text>
+            {mode === 'reset' ? (
+              <Text style={{ fontSize: 13, color: '#1677ff', cursor: 'pointer', fontWeight: 500 }} onClick={() => switchMode('login')}>返回登录</Text>
+            ) : (
+              <Text style={{ fontSize: 13, color: '#1677ff', cursor: 'pointer', fontWeight: 500 }} onClick={() => switchMode('reset')}>忘记密码？</Text>
+            )}
           </div>
 
-          {/* 登录按钮 */}
+          {/* 主按钮 */}
           <Button type="primary" block size="large" loading={loading} onClick={handleSubmit}
             style={{
               borderRadius: 14, height: 48, fontSize: 16, fontWeight: 600, letterSpacing: 2,
               background: 'linear-gradient(135deg, #1677ff 0%, #0ea5e9 50%, #06b6d4 100%)', border: 'none',
               boxShadow: '0 6px 24px rgba(22,119,255,0.35)',
             }}>
-            {tab === 'login' ? '🐟 潜入深蓝' : '🐠 开始探索'}
+            {mode === 'login' ? '🐟 潜入深蓝' : mode === 'register' ? '🐠 开始探索' : '🔑 重置密码'}
           </Button>
+
         </Space>
 
         {/* 语言 / 字体设置 */}
@@ -474,13 +542,20 @@ export function LoginPage({ onLogin, ollamaReady, ollamaSetupProgress, onGuestMo
         {/* 底部 */}
         <div style={{ marginTop: 14 }}>
           <Text style={{ fontSize: 12, color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }}>
-            {!isElectron && (tab === 'login' ? '还没有账号？' : '已经有账号了？')}
+            {!isElectron && mode !== 'reset' && (mode === 'login' ? '还没有账号？' : '已经有账号了？')}
           </Text>
-          {!isElectron && (
+          {!isElectron && mode !== 'reset' && (
             <Button type="link" size="small" style={{ fontSize: 12, fontWeight: 600, padding: '0 4px' }}
-              onClick={() => setTab(tab === 'login' ? 'register' : 'login')}>
-              {tab === 'login' ? '立即注册' : '去登录'}
+              onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}>
+              {mode === 'login' ? '用 QQ 邮箱注册' : '去登录'}
             </Button>
+          )}
+          {isElectron && mode === 'login' && (
+            <div style={{ marginTop: 4 }}>
+              <Text style={{ fontSize: 11, color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(10,37,64,0.3)' }}>
+                初始管理员账号：admin / admin123（登录后可在设置里配置邮箱服务并注册自己的账号）
+              </Text>
+            </div>
           )}
         </div>
       </Card>

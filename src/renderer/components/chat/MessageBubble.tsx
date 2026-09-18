@@ -1,163 +1,149 @@
-import React from 'react';
-import { Avatar, Button, Space, Tooltip, Typography, Image } from 'antd';
-import { UserOutlined, RobotOutlined, CopyOutlined, ReloadOutlined } from '@ant-design/icons';
+import React, { useState } from 'react';
+import { CheckOutlined, CopyOutlined, ReloadOutlined } from '@ant-design/icons';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { ThinkingBlock } from './ThinkingBlock';
-import type { ImageAttachment } from '../../stores/chat-store';
+import ThinkingBlock from './ThinkingBlock';
+import ToolCallBlock, { type ToolCallInfo } from './ToolCallBlock';
+import PermissionCard, { type PermissionRequest } from './PermissionCard';
 
-const { Text } = Typography;
+/**
+ * 消息气泡 — 玻璃质感
+ * 一条 assistant 消息内可能有：思考块 → 文本 → 工具调用块（交错）
+ * 所以这里按「内容片段」顺序渲染，而不是把工具调用当纯文本。
+ */
 
-interface Message {
+export interface MessageSegment {
+  kind: 'text' | 'thinking' | 'tool';
+  text?: string;
+  toolCallId?: string;
+}
+
+export interface ChatMessageView {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant';
   content: string;
-  images?: ImageAttachment[];
   thinking?: string;
-  isStreaming?: boolean;
-  isError?: boolean;
-  errorMessage?: string;
-  createdAt: number;
+  /** 有序内容片段（有则优先按它渲染） */
+  segments?: MessageSegment[];
+  toolCalls?: Record<string, ToolCallInfo>;
+  permission?: PermissionRequest;
+  createdAt?: number;
+  streaming?: boolean;
 }
 
-interface MessageBubbleProps {
-  message: Message;
-  isLast: boolean;
-  isStreaming: boolean;
+interface Props {
+  message: ChatMessageView;
+  onCopy?: (text: string) => void;
+  onRegenerate?: () => void;
+  onPermissionRespond?: (id: string, d: 'allow' | 'allow-always' | 'deny') => void;
 }
 
-export const MessageBubble = React.memo(function MessageBubble({ message, isLast, isStreaming }: MessageBubbleProps) {
+const fmtTime = (ts?: number) => {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+const MessageBubble: React.FC<Props> = ({ message, onCopy, onRegenerate, onPermissionRespond }) => {
+  const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
-  const hasThinking = message.thinking && message.thinking.length > 0;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content);
+    const t = message.content || '';
+    navigator.clipboard?.writeText(t).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+    onCopy?.(t);
+  };
+
+  /* ---------- 渲染一组内容片段 ---------- */
+  const renderBody = () => {
+    const segs = message.segments;
+    if (segs && segs.length > 0) {
+      return segs.map((s, i) => {
+        if (s.kind === 'thinking') {
+          return <ThinkingBlock key={i} content={s.text || ''} />;
+        }
+        if (s.kind === 'tool') {
+          const call = s.toolCallId ? message.toolCalls?.[s.toolCallId] : undefined;
+          if (!call) return null;
+          return <ToolCallBlock key={call.id} call={call} />;
+        }
+        // 流式光标只挂在最后一个文本片段上，否则每个片段都带一个光标
+        const isLastText = i === segs.length - 1;
+        return (
+          <div key={i} className="markdown-content">
+            <MarkdownRenderer
+              content={s.text || ''}
+              isStreaming={!!message.streaming && isLastText}
+            />
+          </div>
+        );
+      });
+    }
+
+    /* 无片段信息时回退到简单渲染 */
+    return (
+      <>
+        {message.thinking && <ThinkingBlock content={message.thinking} />}
+        {!!message.toolCalls && Object.values(message.toolCalls).map((c) => (
+          <ToolCallBlock key={c.id} call={c} />
+        ))}
+        {!!message.content && (
+          <div className="markdown-content">
+            <MarkdownRenderer
+              content={message.content}
+              isStreaming={!!message.streaming}
+            />
+          </div>
+        )}
+      </>
+    );
   };
 
   return (
-    <div className="msg-enter"
-      style={{
-        display: 'flex',
-        gap: 12,
-        padding: '14px 0',
-        flexDirection: isUser ? 'row-reverse' : 'row',
-      }}
-    >
+    <div className={`msg-row ${isUser ? 'user' : 'assistant'}`}>
       {/* 头像 */}
-      <Avatar
-        size={42}
-        icon={isUser ? <UserOutlined /> : <RobotOutlined />}
-        style={{
-          background: isUser
-            ? 'linear-gradient(135deg, #1677ff, #4096ff)'
-            : 'linear-gradient(135deg, #722ed1, #b37feb)',
-          flexShrink: 0,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.10)',
-        }}
-      />
+      <div className={`msg-avatar ${isUser ? 'user' : 'agent'}`}>
+        {isUser ? '我' : <span className="dot" />}
+      </div>
 
-      {/* 消息内容 */}
-      <div style={{ flex: 1, minWidth: 0, fontSize: 15 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 4,
-          }}
-        >
-          <Text strong style={{ fontSize: 14 }}>
-            {isUser ? '你' : '小小榆'}
-          </Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {new Date(message.createdAt * 1000).toLocaleTimeString('zh-CN', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </Text>
+      {/* 正文 */}
+      <div className="msg-col">
+        <div className="msg-meta">
+          <span>{isUser ? '我' : 'Agent'}</span>
+          {!!message.createdAt && <span>{fmtTime(message.createdAt)}</span>}
         </div>
 
-        {/* 思考过程 */}
-        {hasThinking && <ThinkingBlock content={message.thinking || ''} />}
-
-        {/* 错误信息 */}
-        {message.isError && (
-          <div
-            style={{
-              padding: '8px 12px',
-              background: '#fff2f0',
-              border: '1px solid #ffccc7',
-              borderRadius: 8,
-              marginBottom: 8,
-            }}
-          >
-            <Text type="danger">{message.errorMessage || '请求失败'}</Text>
+        {!isUser ? (
+          <div className="msg-bubble agent">
+            {renderBody()}
+          </div>
+        ) : (
+          <div className="msg-bubble user">
+            <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
           </div>
         )}
 
-        {/* 用户上传的图片 */}
-        {message.images && message.images.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-            {message.images.map((img, i) => {
-              const src = `data:${img.mimeType};base64,${img.data}`;
-              return (
-                <Image
-                  key={i}
-                  src={src}
-                  width={120}
-                  style={{ borderRadius: 12, objectFit: 'cover', border: '1px solid rgba(0,0,0,0.08)' }}
-                  preview={{ mask: '点击预览' }}
-                />
-              );
-            })}
-          </div>
+        {/* 权限确认（附在 agent 消息末尾） */}
+        {!isUser && message.permission && onPermissionRespond && (
+          <PermissionCard request={message.permission} onRespond={onPermissionRespond} />
         )}
 
-        {/* 消息文本 */}
-        <div
-          className="markdown-content glass-bubble"
-          style={{
-            background: isUser
-              ? 'rgba(22,119,255,0.12)'
-              : 'rgba(255,255,255,0.55)',
-            backdropFilter: 'blur(10px)',
-            WebkitBackdropFilter: 'blur(10px)',
-            padding: '14px 18px',
-            borderRadius: 16,
-            borderTopRightRadius: isUser ? 6 : 16,
-            borderTopLeftRadius: isUser ? 16 : 6,
-            border: isUser
-              ? '1px solid rgba(22,119,255,0.18)'
-              : '1px solid rgba(255,255,255,0.45)',
-            lineHeight: 1.7,
-            boxShadow: isUser
-              ? '0 2px 8px rgba(22,119,255,0.06)'
-              : '0 4px 16px rgba(0,0,0,0.04)',
-          }}
-        >
-          {isUser ? (
-            <Text style={{ whiteSpace: 'pre-wrap' }}>{message.content}</Text>
-          ) : (
-            <MarkdownRenderer
-              content={message.content}
-              isStreaming={isStreaming}
-            />
+        {/* 操作条 */}
+        <div className="msg-actions">
+          <button className="msg-act" onClick={handleCopy} title="复制">
+            {copied ? <CheckOutlined /> : <CopyOutlined />} {copied ? '已复制' : '复制'}
+          </button>
+          {!isUser && onRegenerate && (
+            <button className="msg-act" onClick={onRegenerate} title="重新生成">
+              <ReloadOutlined /> 重试
+            </button>
           )}
         </div>
-
-        {/* 操作按钮 */}
-        {!isUser && !isStreaming && message.content && (
-          <Space style={{ marginTop: 4 }}>
-            <Tooltip title="复制">
-              <Button type="text" size="small" icon={<CopyOutlined />} onClick={handleCopy} />
-            </Tooltip>
-            {isLast && (
-              <Tooltip title="重新生成">
-                <Button type="text" size="small" icon={<ReloadOutlined />} />
-              </Tooltip>
-            )}
-          </Space>
-        )}
       </div>
     </div>
   );
-});
+};
+
+export default MessageBubble;

@@ -1,6 +1,6 @@
 // 聊天路由 — SSE 流式响应
 import { Router, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import { ModelRouter } from '../../adapters/index';
 import { authMiddleware, getUserId } from '../middleware/auth';
 import { queryOne, executeBatch } from '../store/database';

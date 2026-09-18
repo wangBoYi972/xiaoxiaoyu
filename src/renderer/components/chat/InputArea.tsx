@@ -1,41 +1,42 @@
 import api from '../../../api';
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Button, Input, Select, Space, Tooltip, Image, Popover, Slider, Typography, Tag } from 'antd';
-import { SendOutlined, PauseCircleOutlined, PictureOutlined, SettingOutlined, ThunderboltOutlined, CloseOutlined } from '@ant-design/icons';
+import { Button, Image, Popover, Slider, Typography, Badge, Tooltip } from 'antd';
+import {
+  SendOutlined,
+  PauseCircleOutlined,
+  PictureOutlined,
+  SettingOutlined,
+  CodeOutlined,
+  RocketOutlined,
+  CloseOutlined,
+} from '@ant-design/icons';
 import { useChatStore, ImageAttachment } from '../../stores/chat-store';
 import { useModelStore } from '../../stores/model-store';
 import { useConversationStore } from '../../stores/conversation-store';
-import { v4 as uuidv4 } from 'uuid';
+import { useWorkspaceStore, tabId, type Tab } from '../../stores/workspace-store';
+import { useRunnerStore } from '../../stores/runner-store';
+import { handleToolCall, handleToolResult, subscribeAgentConfirm, appendTextDelta, appendThinkingDelta } from '../../agent-bridge';
+
+// Node 20+/Chromium 原生 UUID（替代 uuid 包，规避 GHSA-w5hq-g745-h8pq）
+const uuidv4 = (): string => crypto.randomUUID();
 
 const { Text } = Typography;
 
-interface SkillItem {
-  id: string; name: string; description: string; icon: string; category: string; systemPrompt: string; temperature?: number;
-}
+/** 仅在桌面端才有内置工具与工作区沙箱 */
+const isElectron = !!(window as any).electronAPI;
 
-export function InputArea() {
+export function InputArea({ onFirstSend }: { onFirstSend?: (text: string) => Promise<string | undefined> }) {
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
-  const [activeSkillIds, setActiveSkillIds] = useState<string[]>([]);
-  const [allSkills, setAllSkills] = useState<SkillItem[]>([]);
   const [temperature, setTemperature] = useState(0.7);
   const [showParams, setShowParams] = useState(false);
+  const [agentMode, setAgentMode] = useState(true);
   const textAreaRef = useRef<any>(null);
 
+  const workspace = useWorkspaceStore((s) => s.workspace);
   const { messages, isStreaming, conversationId, addMessage, appendToLastMessage, appendThinking, setStreaming, setConversationId, setError } = useChatStore();
-  const { activeProviderId, activeModelId, availableModels, setActiveProvider, setActiveModel } = useModelStore();
-  const { createConversation, activeId } = useConversationStore();
-
-  // 加载技能
-  useEffect(() => {
-    api.listSkills().then((list: SkillItem[]) => { setAllSkills(list || []); }).catch(() => {});
-  }, []);
-
-  // 组合选中的技能提示词
-  const combinedSysPrompt = activeSkillIds
-    .map((id) => allSkills.find((s) => s.id === id)?.systemPrompt)
-    .filter(Boolean)
-    .join('\n\n');
+  const { activeProviderId, activeModelId } = useModelStore();
+  const { createConversation } = useConversationStore();
 
   const handleFileSelect = async () => {
     const files = await api.openFileDialog({ filters: [{ name: '图片', extensions: ['png','jpg','jpeg','gif','webp','bmp'] }] });
@@ -50,60 +51,12 @@ export function InputArea() {
     setImages((p) => [...p, ...imgs]);
   };
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if (!text && !images.length) return;
+  /** 发起一次聊天请求（用于手动输入、快捷启动项目等） */
+  const sendText = useCallback(async (text: string) => {
+    if (!text.trim() && !images.length) return;
     if (isStreaming) return;
 
-    // ====== 技能安装命令检测 ======
-    const installMatch = text.match(/^(安装|添加|启用|下载)\s*(技能|skill)[:：]?\s*(.+)$/i);
-    const listMatch  = text.match(/^(技能列表|技能市场|有哪些技能|查看技能)/i);
-    const delMatch   = text.match(/^(删除|卸载|移除)\s*(技能|skill)[:：]?\s*(.+)$/i);
-
-    if (installMatch) {
-      const query = installMatch[3].trim().toLowerCase();
-      const target = allSkills.find((s) =>
-        s.id.toLowerCase().includes(query) ||
-        s.name.toLowerCase().includes(query) ||
-        (s.description && s.description.toLowerCase().includes(query))
-      );
-      if (target) {
-        await api.installSkill({ skill: target });
-        setActiveSkillIds((prev) => prev.includes(target.id) ? prev : [...prev, target.id]);
-        addMessage({ id: uuidv4(), role: 'system', content: `技能「${target.name}」已安装并启用`, createdAt: Math.floor(Date.now() / 1000) });
-      } else {
-        addMessage({ id: uuidv4(), role: 'system', content: `未找到匹配"${query}"的技能。输入"技能列表"查看所有可用技能`, createdAt: Math.floor(Date.now() / 1000) });
-      }
-      setInput('');
-      return;
-    }
-
-    if (listMatch) {
-      const list = allSkills.map((s) => `${s.icon} **${s.name}** (${s.id}) - ${s.description}`).join('\n');
-      addMessage({ id: uuidv4(), role: 'system', content: `## 可用技能\n\n${list}\n\n输入"安装技能 XXX"即可安装`, createdAt: Math.floor(Date.now() / 1000) });
-      setInput('');
-      return;
-    }
-
-    if (delMatch) {
-      const query = delMatch[3].trim().toLowerCase();
-      const target = allSkills.find((s) =>
-        s.id.toLowerCase().includes(query) ||
-        s.name.toLowerCase().includes(query)
-      );
-      if (target) {
-        await api.deleteSkill(target.id);
-        setActiveSkillIds((prev) => prev.filter((id) => id !== target.id));
-        addMessage({ id: uuidv4(), role: 'system', content: `技能「${target.name}」已卸载`, createdAt: Math.floor(Date.now() / 1000) });
-      } else {
-        addMessage({ id: uuidv4(), role: 'system', content: `未找到技能"${query}"`, createdAt: Math.floor(Date.now() / 1000) });
-      }
-      setInput('');
-      return;
-    }
-
-    // ====== 正常发送 ======
-    const finalText = text || '请描述这张图片';
+    const finalText = text.trim() || '请描述这张图片';
 
     let msgContent: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
     if (images.length > 0) {
@@ -113,12 +66,22 @@ export function InputArea() {
     }
 
     addMessage({ id: uuidv4(), role: 'user', content: finalText, images: images.length > 0 ? [...images] : undefined, createdAt: Math.floor(Date.now() / 1000) });
-    setInput(''); setImages([]);
-    addMessage({ id: uuidv4(), role: 'assistant', content: '', isStreaming: true, createdAt: Math.floor(Date.now() / 1000) });
+    setInput('');
+    setImages([]);
+    const assistantMsgId = uuidv4();
+    addMessage({ id: assistantMsgId, role: 'assistant', content: '', isStreaming: true, createdAt: Math.floor(Date.now() / 1000) });
     setStreaming(true);
 
-    let convId = conversationId || activeId;
-    if (!convId) { const c = await createConversation(finalText.slice(0, 50), activeModelId, activeProviderId); convId = c.id; setConversationId(convId); }
+    let convId = conversationId || null;
+    if (!convId && onFirstSend) {
+      const newId = await onFirstSend(finalText);
+      if (newId) { convId = newId; setConversationId(newId); }
+    }
+    if (!convId) {
+      const c = await createConversation(finalText.slice(0, 50), activeModelId, activeProviderId);
+      convId = c.id;
+      setConversationId(convId);
+    }
 
     const msgHistory = [
       ...messages.map((m) => {
@@ -129,8 +92,13 @@ export function InputArea() {
     ];
 
     let cleanup: (() => void) | null = null;
+    let unsubscribeConfirm: (() => void) | null = null;
+    const cleanupAll = () => {
+      cleanup?.(); cleanup = null;
+      unsubscribeConfirm?.(); unsubscribeConfirm = null;
+    };
+
     try {
-      // RAF 节流：将高频 chunk 合并到每帧一次的状态更新，避免 React 过载
       let pendingText = '';
       let pendingThinking = '';
       let rafId: number | null = null;
@@ -138,85 +106,282 @@ export function InputArea() {
 
       const flushPending = () => {
         rafId = null;
-        if (pendingText) { appendToLastMessage(pendingText); pendingText = ''; }
-        if (pendingThinking) { appendThinking(pendingThinking); pendingThinking = ''; }
-        if (isDone) { setStreaming(false); if (cleanup) cleanup(); }
+        if (pendingText) { appendToLastMessage(pendingText); appendTextDelta(assistantMsgId, pendingText); pendingText = ''; }
+        if (pendingThinking) { appendThinking(pendingThinking); appendThinkingDelta(assistantMsgId, pendingThinking); pendingThinking = ''; }
+        if (isDone) { setStreaming(false); cleanupAll(); }
       };
 
       cleanup = api.onStreamChunk((chunk) => {
+        if (useChatStore.getState().conversationId !== convId) {
+          pendingText = '';
+          pendingThinking = '';
+          if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+          cleanupAll();
+          api.stopGeneration();
+          return;
+        }
         if (chunk.type === 'text-delta' && chunk.textDelta) {
           pendingText += chunk.textDelta;
         } else if (chunk.type === 'thinking-delta' && chunk.thinkingDelta) {
           pendingThinking += chunk.thinkingDelta;
+        } else if (chunk.type === 'tool-call' && chunk.toolCall) {
+          handleToolCall(assistantMsgId, chunk.toolCall);
+        } else if (chunk.type === 'tool-result' && chunk.toolResult) {
+          handleToolResult(assistantMsgId, chunk.toolResult);
         } else if (chunk.type === 'error' && chunk.error) {
-          if (rafId !== null) { cancelAnimationFrame(rafId); flushPending(); }
+          isDone = true;
+          if (rafId !== null) { cancelAnimationFrame(rafId); }
+          flushPending();
           setError(chunk.error.message);
           return;
         } else if (chunk.type === 'done') {
           isDone = true;
         } else {
-          return; // 其他类型不处理
+          return;
         }
-        // 每帧最多更新一次 React 状态
         if (rafId === null) {
           rafId = requestAnimationFrame(flushPending);
         }
       });
-      await api.sendChatMessage({ providerId: activeProviderId, modelId: activeModelId, messages: msgHistory, systemPrompt: combinedSysPrompt || undefined, temperature, maxTokens: 4096, conversationId: convId });
-    } catch (err: any) { setError(err.message || '发送失败'); setStreaming(false); if (cleanup) cleanup(); }
-  }, [input, images, isStreaming, messages, conversationId, activeId, activeProviderId, activeModelId, combinedSysPrompt, temperature]);
 
-  const providerOptions = [
-    { label: 'Claude', value: 'anthropic' }, { label: 'OpenAI', value: 'openai' }, { label: 'DeepSeek', value: 'deepseek' },
-    { label: '通义千问', value: 'qwen' }, { label: '智谱GLM', value: 'glm' }, { label: 'Kimi', value: 'moonshot' },
-    { label: 'Gemini', value: 'gemini' }, { label: '文心一言', value: 'ernie' }, { label: 'Ollama', value: 'ollama' },
-  ];
+      unsubscribeConfirm = subscribeAgentConfirm();
+
+      const workspacePath = useWorkspaceStore.getState().workspace?.path;
+      // 用户可手动关闭 Agent 模式；只有桌面端 + 有工作区 + 开启时才注入内置工具
+      const effectiveAgentMode = agentMode && !!workspacePath && !!isElectron;
+
+      if (effectiveAgentMode && activeProviderId === 'ollama') {
+        addMessage({
+          id: uuidv4(),
+          role: 'system',
+          content: '当前使用本地模型，小参数模型调用工具（读写文件/执行命令）的稳定性有限；如果它只回文字不动手，建议切到 DeepSeek、Qwen 等云端模型。',
+          createdAt: Math.floor(Date.now() / 1000),
+        });
+      }
+
+      await api.sendChatMessage({
+        providerId: activeProviderId,
+        modelId: activeModelId,
+        messages: msgHistory,
+        temperature,
+        maxTokens: 4096,
+        conversationId: convId,
+        agentMode: effectiveAgentMode,
+        workspacePath: effectiveAgentMode ? workspacePath : undefined,
+      });
+      cleanupAll();
+    } catch (err: any) { setError(err.message || '发送失败'); setStreaming(false); cleanupAll(); }
+  }, [input, images, isStreaming, messages, conversationId, activeProviderId, activeModelId, temperature, onFirstSend, agentMode]);
+
+  const handleSend = useCallback(() => {
+    sendText(input);
+  }, [sendText, input]);
+
+  /** 点击「启动项目」—— 打开终端标签，探测项目类型并启动第一个候选命令 */
+  const handleLaunchProject = async () => {
+    const electron = (window as any).electronAPI;
+    if (!electron?.runner?.detect) return; // 浏览器预览没有启动能力
+
+    // 打开（或复用）「运行」终端标签
+    const ws = useWorkspaceStore.getState();
+    const existing = ws.tabs.find((t) => t.type === 'terminal');
+    if (existing) {
+      ws.setActiveTab(existing.id);
+    } else {
+      const termTab: Tab = { id: tabId(), type: 'terminal', title: '运行', icon: 'rocket' };
+      ws.addTab(termTab);
+    }
+
+    // 先探测项目类型与候选命令
+    await useRunnerStore.getState().detectProject();
+    const { detect } = useRunnerStore.getState();
+    const first = detect?.commands[0];
+    if (first) {
+      useRunnerStore.getState().selectCommand(first.id);
+      await useRunnerStore.getState().start();
+    }
+  };
+
+  /** 打开工作区（代码大师未激活时点击） */
+  const openWorkspace = async () => {
+    try {
+      const api = (window as any).electronAPI;
+      if (!api?.workspace?.open) return;
+      const result = await api.workspace.open();
+      if (result.success && result.workspace) {
+        useWorkspaceStore.getState().setWorkspace(result.workspace);
+        setAgentMode(true);
+      }
+    } catch {}
+  };
 
   const isMobile = window.innerWidth < 768;
+
+  const canLaunch = isElectron && !!workspace;
+
   return (
-    <div style={{ padding: isMobile ? '8px 8px 12px' : '12px 24px 16px', maxWidth: 800, margin: '0 auto 16px', width: '100%' }}>
+    <div style={{ width: '100%' }}>
       {/* 图片预览 */}
       {images.length > 0 && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
           {images.map((img, i) => (
             <div key={i} style={{ position: 'relative' }}>
-              <Image src={`data:${img.mimeType};base64,${img.data}`} width={56} height={56} style={{ borderRadius: 10, objectFit: 'cover' }} preview={{ mask: '' }} />
-              <Button type="text" size="small" danger icon={<CloseOutlined />} onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
-                style={{ position: 'absolute', top: -8, right: -8, borderRadius: '50%', width: 18, height: 18, minWidth: 18, fontSize: 10, background: 'rgba(255,255,255,0.9)' }} />
+              <Image
+                src={`data:${img.mimeType};base64,${img.data}`}
+                width={56}
+                height={56}
+                style={{ borderRadius: 10, objectFit: 'cover' }}
+                preview={{ mask: '' }}
+              />
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<CloseOutlined />}
+                onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
+                style={{
+                  position: 'absolute',
+                  top: -8,
+                  right: -8,
+                  borderRadius: '50%',
+                  width: 18,
+                  height: 18,
+                  minWidth: 18,
+                  fontSize: 10,
+                  background: 'var(--g-panel-strong)',
+                  border: '1px solid var(--g-stroke)',
+                }}
+              />
             </div>
           ))}
         </div>
       )}
 
-      {/* 模型 + 技能选择 */}
-      <Space style={{ marginBottom: 6, flexWrap: 'wrap' }} size={4}>
-        <Select size="small" value={activeProviderId} onChange={setActiveProvider} options={providerOptions} style={{ minWidth: 80 }} bordered={false} />
-        <Select size="small" value={activeModelId} onChange={setActiveModel}
-          options={availableModels.map((m) => ({ label: m.displayName, value: m.id }))} style={{ minWidth: 140 }} bordered={false} />
-        <Select mode="multiple" size="small" value={activeSkillIds} onChange={setActiveSkillIds}
-          placeholder={<span><ThunderboltOutlined /> 技能</span>}
-          bordered={false} style={{ minWidth: 120, maxWidth: 220 }}
-          maxTagCount={1} maxTagPlaceholder={(omitted) => `+${omitted.length}`}
-          options={allSkills.map((s) => ({ label: `${s.icon} ${s.name}`, value: s.id }))} />
-        <Popover open={showParams} onOpenChange={setShowParams} trigger="click"
-          content={<div style={{ width: 220 }}>
-            <Text style={{ fontSize: 12 }}>温度 (创造性): {temperature.toFixed(1)}</Text>
-            <Slider min={0} max={2} step={0.1} value={temperature} onChange={setTemperature} marks={{ 0: '精确', 1: '平衡', 2: '创意' }} />
-          </div>}>
-          <Button size="small" type="text" icon={<SettingOutlined />} />
-        </Popover>
-      </Space>
+      {/* 玻璃输入容器 */}
+      <div className="composer">
+        <textarea
+          ref={textAreaRef}
+          className="composer-input g-scroll"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            const el = e.target as HTMLTextAreaElement;
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 220) + 'px';
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+          placeholder={
+            images.length > 0 ? '描述图片… (Enter 发送)' : '给小小榆下达任务… (Enter 发送, Shift+Enter 换行)'
+          }
+          rows={1}
+          disabled={isStreaming}
+        />
 
-      {/* 输入区 */}
-      <div className="glass-input" style={{ display: 'flex', gap: 8, alignItems: 'flex-end', borderRadius: 16, padding: '10px 14px', boxShadow: '0 8px 32px rgba(0,0,0,0.06)' }}>
-        <Tooltip title="上传图片"><Button type="text" className="btn-icon" icon={<PictureOutlined />} onClick={handleFileSelect} /></Tooltip>
-        <Input.TextArea ref={textAreaRef} value={input} onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-          placeholder={images.length > 0 ? '描述图片... (Enter 发送)' : '输入消息... (Enter 发送, Shift+Enter 换行)'}
-          autoSize={{ minRows: 1, maxRows: 6 }} variant="borderless" style={{ background: 'transparent', flex: 1 }} disabled={isStreaming} />
-        {isStreaming
-          ? <Tooltip title="停止"><Button type="text" danger className="btn-icon" icon={<PauseCircleOutlined />} onClick={() => { api.stopGeneration(); setStreaming(false); }} /></Tooltip>
-          : <Tooltip title="发送"><Button type="primary" className="btn-send" icon={<SendOutlined />} onClick={handleSend} disabled={!(input.trim() || images.length)} /></Tooltip>}
+        {/* 底部工具条 */}
+        <div className="composer-bar">
+          <button className="g-icon-btn" onClick={handleFileSelect} title="上传图片">
+            <PictureOutlined />
+          </button>
+
+          {/* 代码大师 / Agent 模式开关 */}
+          <Tooltip
+            title={
+              !isElectron
+                ? '代码大师模式仅限桌面端使用'
+                : workspace
+                ? agentMode
+                  ? '代码大师已开启：Agent 可操作项目文件并执行命令'
+                  : '代码大师已关闭：本次仅做普通对话'
+                : '点击选择项目目录以开启代码大师'
+            }
+          >
+            <button
+              className={`g-chip composer-mode-chip ${agentMode && workspace ? 'active' : ''}`}
+              onClick={() => {
+                if (!workspace) { openWorkspace(); return; }
+                setAgentMode((v) => !v);
+              }}
+              title="代码大师"
+            >
+              <CodeOutlined />
+              <span>代码大师</span>
+              {workspace && (
+                <Badge
+                  status={agentMode ? 'success' : 'default'}
+                  style={{ marginLeft: 4 }}
+                />
+              )}
+            </button>
+          </Tooltip>
+
+          {/* 启动项目：桌面端且已选择工作区时显示 */}
+          {canLaunch && (
+            <Tooltip title="打开运行面板并启动项目（支持 Maven / Gradle / Node / Python / Go / 静态站点）">
+              <button
+                className="g-chip composer-mode-chip launch"
+                onClick={handleLaunchProject}
+                title="启动项目"
+              >
+                <RocketOutlined />
+                <span>启动项目</span>
+              </button>
+            </Tooltip>
+          )}
+
+          {/* 温度参数 */}
+          <Popover
+            open={showParams}
+            onOpenChange={setShowParams}
+            trigger="click"
+            content={
+              <div style={{ width: 220 }}>
+                <Text style={{ fontSize: 12 }}>温度 (创造性): {temperature.toFixed(1)}</Text>
+                <Slider
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={temperature}
+                  onChange={setTemperature}
+                  marks={{ 0: '精确', 1: '平衡', 2: '创意' }}
+                />
+              </div>
+            }
+          >
+            <button className="g-icon-btn" title="参数">
+              <SettingOutlined />
+            </button>
+          </Popover>
+
+          <div style={{ flex: 1 }} />
+
+          {/* 发送 / 停止 */}
+          {isStreaming ? (
+            <button
+              className="g-send stop"
+              title="停止生成"
+              onClick={() => {
+                api.stopGeneration();
+                setStreaming(false);
+              }}
+            >
+              <PauseCircleOutlined />
+            </button>
+          ) : (
+            <button
+              className="g-send"
+              title="发送"
+              onClick={handleSend}
+              disabled={!(input.trim() || images.length)}
+            >
+              <SendOutlined />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

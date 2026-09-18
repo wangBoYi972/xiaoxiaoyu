@@ -15,7 +15,8 @@
   },
   "include": [
     "src/server/**/*.ts",
-    "src/adapters/**/*.ts"
+    "src/adapters/**/*.ts",
+    "src/shared/**/*.ts"
   ],
   "exclude": [
     "node_modules",

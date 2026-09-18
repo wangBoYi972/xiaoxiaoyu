@@ -8,6 +8,9 @@ import { registerMcpHandlers } from './mcp.ipc';
 import { registerSkillsHandlers } from './skills.ipc';
 import { registerAuthHandlers } from './auth.ipc';
 import { registerOllamaHandlers } from './ollama.ipc';
+import { registerWorkspaceHandlers } from './workspace.ipc';
+import { registerRunnerHandlers } from './runner.ipc';
+import { registerRagHandlers } from './rag.ipc';
 import './finetune.ipc';
 
 export function registerIpcHandlers(): void {
@@ -20,4 +23,7 @@ export function registerIpcHandlers(): void {
   registerMcpHandlers();
   registerSkillsHandlers();
   registerOllamaHandlers();
+  registerWorkspaceHandlers();
+  registerRunnerHandlers();
+  registerRagHandlers();
 }

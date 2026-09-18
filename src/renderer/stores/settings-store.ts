@@ -11,6 +11,8 @@ interface SettingsStore {
   bgImage: string;          // base64 data URL 或空
   bgOpacity: number;        // 背景透明度 (0.1 ~ 1.0)
   settingsOpen: boolean;
+  /** 打开设置时默认落在哪个页签（如 'rag'），用完由抽屉自行清空 */
+  settingsTab: string;
 
   loadSettings: () => Promise<void>;
   setTheme: (theme: 'light' | 'dark' | 'system') => void;
@@ -22,6 +24,8 @@ interface SettingsStore {
   setBgImage: (base64: string) => void;
   setBgOpacity: (opacity: number) => void;
   toggleSettings: () => void;
+  openSettingsTab: (tab: string) => void;
+  clearSettingsTab: () => void;
   saveSetting: (key: string, value: string) => Promise<void>;
 }
 
@@ -35,6 +39,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   bgImage: '',
   bgOpacity: 0.35,
   settingsOpen: false,
+  settingsTab: '',
 
   loadSettings: async () => {
     try {
@@ -72,6 +77,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
+  openSettingsTab: (tab) => set({ settingsOpen: true, settingsTab: tab }),
+  clearSettingsTab: () => set({ settingsTab: '' }),
 
   saveSetting: async (key, value) => {
     try { await api.setSetting(key, value); } catch {}

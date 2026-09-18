@@ -63,8 +63,8 @@ export function McpSettings() {
         </div>
       ) : (
         servers.map((server) => (
-          <Card key={server.id} size="small"
-            style={{ marginBottom: 8, borderRadius: 12, border: '1px solid rgba(0,0,0,0.06)' }}
+          <Card key={server.id} size="small" className="glass-card"
+            style={{ marginBottom: 8 }}
             styles={{ body: { padding: 14 } }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Space>

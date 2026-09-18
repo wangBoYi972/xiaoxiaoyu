@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Form, Input, Tag, Divider, Typography } from 'antd';
+import { Modal, Form, Input, Tag, Divider, Typography, Select } from 'antd';
 import { ApiOutlined, KeyOutlined, LinkOutlined } from '@ant-design/icons';
 import { getPresetModels } from '../../../adapters/index';
 
@@ -10,7 +10,8 @@ interface ProviderConfig {
 }
 
 interface ProviderConfigModalProps {
-  open: boolean; provider: ProviderConfig; onClose: () => void; onSave: (config: ProviderConfig) => Promise<void>;
+  open: boolean; provider: ProviderConfig; onClose: () => void;
+  onSave: (config: { id: string; name: string; apiKey?: string; baseUrl?: string; enabled: boolean; models: string[]; extraHeaders?: Record<string, string> }) => Promise<void>;
 }
 
 export function ProviderConfigModal({ open, provider, onClose, onSave }: ProviderConfigModalProps) {
@@ -66,7 +67,7 @@ export function ProviderConfigModal({ open, provider, onClose, onSave }: Provide
 
       <Form form={form} layout="vertical" size="middle">
         <Form.Item label={<span style={{ fontWeight: 500 }}>显示名称</span>} name="name">
-          <Input placeholder="提供商名称" prefix={<ApiOutlined style={{ color: '#999' }} />} style={{ borderRadius: 8 }} />
+          <Input placeholder="提供商名称" prefix={<ApiOutlined style={{ color: 'var(--text-tertiary)' }} />} style={{ borderRadius: 8 }} />
         </Form.Item>
 
         {provider.id !== 'ollama' && (
@@ -76,24 +77,34 @@ export function ProviderConfigModal({ open, provider, onClose, onSave }: Provide
             rules={!provider.hasApiKey ? [{ required: true, message: '请输入 API Key' }] : []}
           >
             <Input.Password placeholder={provider.hasApiKey ? '留空保持原密钥' : '输入 API Key'}
-              prefix={<KeyOutlined style={{ color: '#999' }} />} style={{ borderRadius: 8 }} />
+              prefix={<KeyOutlined style={{ color: 'var(--text-tertiary)' }} />} style={{ borderRadius: 8 }} />
           </Form.Item>
         )}
 
         <Form.Item label={<span style={{ fontWeight: 500 }}>API 地址</span>} name="baseUrl">
-          <Input placeholder="自定义 API 地址（可选）" prefix={<LinkOutlined style={{ color: '#999' }} />} style={{ borderRadius: 8 }} />
+          <Input placeholder="自定义 API 地址（可选）" prefix={<LinkOutlined style={{ color: 'var(--text-tertiary)' }} />} style={{ borderRadius: 8 }} />
         </Form.Item>
 
         {provider.id === 'ernie' && (
           <Form.Item label={<span style={{ fontWeight: 500 }}>Secret Key</span>} name="secretKey">
-            <Input.Password placeholder="输入百度 Secret Key" prefix={<KeyOutlined style={{ color: '#999' }} />} style={{ borderRadius: 8 }} />
+            <Input.Password placeholder="输入百度 Secret Key" prefix={<KeyOutlined style={{ color: 'var(--text-tertiary)' }} />} style={{ borderRadius: 8 }} />
           </Form.Item>
         )}
 
         <Divider style={{ margin: '12px 0' }} />
 
-        <Text style={{ fontSize: 11, fontWeight: 500, color: '#999', textTransform: 'uppercase', letterSpacing: 1 }}>
-          可用模型
+        {/* 模型 ID：内置预设之外还能自己加（中转站/私有模型必备） */}
+        <Form.Item
+          label={<span style={{ fontWeight: 500 }}>模型 ID（自定义）</span>}
+          name="models"
+          extra={<span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>输入后回车添加，可填多个；这些 ID 会出现在输入框的模型下拉里</span>}
+          style={{ marginBottom: 14 }}
+        >
+          <Select mode="tags" tokenSeparators={[',', '，', ' ']} placeholder="例：gpt-4o / glm-4.6 / my-model" style={{ borderRadius: 8 }} />
+        </Form.Item>
+
+        <Text style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: 1 }}>
+          内置可用模型
         </Text>
         {presetModels.length > 0 ? (
           <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>

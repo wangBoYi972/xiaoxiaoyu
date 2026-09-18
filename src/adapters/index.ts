@@ -11,7 +11,7 @@ import {
   GLM_MODELS,
   MOONSHOT_MODELS,
 } from './openai-compat';
-import type { ProviderConfig, UnifiedStreamChunk, ChatRequestOptions, ModelInfo } from './types';
+import type { ProviderConfig, UnifiedStreamChunk, ChatRequestOptions, ModelInfo, UnifiedMessage, ToolDefinition } from './types';
 
 export type { UnifiedStreamChunk, ChatRequestOptions, ModelInfo, ProviderConfig, UnifiedMessage, ContentPart, ToolDefinition } from './types';
 
@@ -62,11 +62,12 @@ export class ModelRouter {
     apiKey: string;
     baseUrl?: string;
     extraHeaders?: Record<string, string>;
-    messages: Array<{ role: string; content: string }>;
+    messages: UnifiedMessage[];
     systemPrompt?: string;
     temperature?: number;
     maxTokens?: number;
     signal?: AbortSignal;
+    tools?: ToolDefinition[];
   }): AsyncGenerator<UnifiedStreamChunk> {
     const config: ProviderConfig = {
       id: options.providerId,
@@ -86,6 +87,7 @@ export class ModelRouter {
       temperature: options.temperature,
       maxTokens: options.maxTokens,
       signal: options.signal,
+      tools: options.tools,
     });
   }
 
