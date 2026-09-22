@@ -6,12 +6,6 @@ import type { UnifiedStreamChunk, ChatRequestOptions, ModelInfo, ProviderConfig 
  * 使用 Anthropic Messages API
  */
 export class AnthropicAdapter extends BaseModelAdapter {
-  private static MODELS: ModelInfo[] = [
-    { id: 'claude-opus-4-8', displayName: 'Claude Opus 4.8', provider: 'anthropic', maxTokens: 200000, supportsVision: true, supportsThinking: true },
-    { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', provider: 'anthropic', maxTokens: 200000, supportsVision: true, supportsThinking: true },
-    { id: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', provider: 'anthropic', maxTokens: 200000, supportsVision: true, supportsThinking: false },
-  ];
-
   protected buildHeaders(): Record<string, string> {
     return {
       'Content-Type': 'application/json',
@@ -39,7 +33,27 @@ export class AnthropicAdapter extends BaseModelAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return AnthropicAdapter.MODELS;
+    const response = await this.simpleFetch('https://api.anthropic.com/v1/models', {
+      headers: this.buildHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error(`获取 Claude 模型失败（HTTP ${response.status}），请检查 API Key 和模型列表权限`);
+    }
+    const data = await response.json() as { data?: Array<{ id?: string; display_name?: string }> };
+    const models: Array<{ id: string; displayName?: string }> = [];
+    for (const model of data.data || []) {
+      const id = model.id?.trim();
+      if (id) models.push({ id, displayName: model.display_name?.trim() });
+    }
+    if (!models.length) throw new Error('Claude 未返回可用模型');
+    return models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName || model.id,
+      provider: 'anthropic',
+      maxTokens: 200000,
+      supportsVision: true,
+      supportsThinking: model.id.includes('opus') || model.id.includes('sonnet'),
+    }));
   }
 
   async *chat(options: ChatRequestOptions): AsyncGenerator<UnifiedStreamChunk> {

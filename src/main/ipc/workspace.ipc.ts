@@ -5,9 +5,8 @@ import path from 'path';
 import { logger } from '../utils/logger';
 import { approveWorkspace, revokeWorkspace } from './file.ipc';
 
-// 文件监听用 Node 原生 fs.watch（递归，Windows/macOS 均支持）。
-// 不用 chokidar：chokidar 5 是纯 ESM，而 Electron 33 内置 Node 20 不支持
-// require(esm)，打包后会在「打开工作区」时抛 ERR_REQUIRE_ESM（2026-09-18 线上踩过）。
+// 文件监听用 Node 原生 fs.watch（逐目录监听）。Windows 的 recursive 模式会丢失
+// 部分删除事件，所以不依赖它；每次目录结构变化后会补扫新增目录的监听器。
 
 interface FileNode {
   name: string;
@@ -16,8 +15,13 @@ interface FileNode {
   children?: FileNode[];
 }
 
-// 文件监听器映射
-const watchers = new Map<string, fsSync.FSWatcher>();
+interface WorkspaceWatcher {
+  directories: Map<string, fsSync.FSWatcher>;
+  rescanTimer?: NodeJS.Timeout;
+}
+
+// 工作区 -> 目录监听器集合
+const watchers = new Map<string, WorkspaceWatcher>();
 
 export function registerWorkspaceHandlers(): void {
   // 打开工作区
@@ -213,52 +217,91 @@ async function getDirectoryChildren(dirPath: string): Promise<FileNode[]> {
 
 // 启动文件监听
 async function startWatcher(workspacePath: string, sender: Electron.WebContents): Promise<void> {
-  const watcher = fsSync.watch(
-    workspacePath,
-    { recursive: true, persistent: true },
-    (eventType, filename) => {
+  const state: WorkspaceWatcher = { directories: new Map() };
+  watchers.set(workspacePath, state);
+
+  const scheduleRescan = () => {
+    if (state.rescanTimer) clearTimeout(state.rescanTimer);
+    state.rescanTimer = setTimeout(() => {
+      state.rescanTimer = undefined;
       if (sender.isDestroyed()) {
-        watcher.close();
-        watchers.delete(workspacePath);
+        stopWatcher(workspacePath);
         return;
       }
-      if (!filename) return;
+      attachDirectoryWatchers(workspacePath, workspacePath, sender, state, scheduleRescan);
+      // 目录级事件在 Windows 上可能只给出父目录；通知渲染层刷新树保证最终一致。
+      sender.send('workspace:file-changed', { type: 'refresh', path: workspacePath });
+    }, 180);
+  };
 
-      const parts = filename.split(/[\\/]/);
-      // 忽略 node_modules / .git 等噪声目录，以及日志临时文件
+  attachDirectoryWatchers(workspacePath, workspacePath, sender, state, scheduleRescan);
+  logger.info(`文件监听已启动: ${workspacePath}`);
+}
+
+function attachDirectoryWatchers(
+  workspacePath: string,
+  dirPath: string,
+  sender: Electron.WebContents,
+  state: WorkspaceWatcher,
+  scheduleRescan: () => void,
+): void {
+  if (state.directories.has(dirPath)) return;
+  let entries: fsSync.Dirent[];
+  try {
+    entries = fsSync.readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  try {
+    const watcher = fsSync.watch(dirPath, { persistent: true }, (eventType, filename) => {
+      if (sender.isDestroyed()) {
+        stopWatcher(workspacePath);
+        return;
+      }
+      const name = filename ? String(filename) : '';
+      const parts = name.split(/[\\/]/).filter(Boolean);
       if (parts.some(shouldIgnore) || parts.some(p => p.endsWith('.tmp') || p.endsWith('~'))) return;
 
-      const fullPath = path.join(workspacePath, filename);
-
+      const fullPath = name ? path.join(dirPath, name) : dirPath;
       try {
-        if (eventType === 'rename') {
-          // rename 事件无法区分新增与删除，用存在性判断
-          const type = fsSync.existsSync(fullPath) ? 'add' : 'unlink';
-          sender.send('workspace:file-changed', { type, path: fullPath });
-        } else {
-          sender.send('workspace:file-changed', { type: 'change', path: fullPath });
-        }
+        const type = eventType === 'rename'
+          ? (fsSync.existsSync(fullPath) ? 'add' : 'unlink')
+          : 'change';
+        sender.send('workspace:file-changed', { type, path: fullPath });
       } catch (e) {
         logger.error('文件变更通知失败:', e instanceof Error ? e : new Error(String(e)));
       }
+      scheduleRescan();
+    });
+    watcher.on('error', (error: unknown) => {
+      logger.error('文件监听错误:', error instanceof Error ? error : new Error(String(error)));
+    });
+    state.directories.set(dirPath, watcher);
+  } catch (error) {
+    logger.warn(`无法监听目录 ${dirPath}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry.isDirectory() && !entry.name.startsWith('.') && !shouldIgnore(entry.name)) {
+      attachDirectoryWatchers(workspacePath, path.join(dirPath, entry.name), sender, state, scheduleRescan);
     }
-  );
-
-  watcher.on('error', (error: unknown) => {
-    logger.error('文件监听错误:', error instanceof Error ? error : new Error(String(error)));
-  });
-
-  watchers.set(workspacePath, watcher);
-  logger.info(`文件监听已启动: ${workspacePath}`);
+  }
 }
 
 // 停止所有监听器
 function stopAllWatchers(): void {
-  watchers.forEach((watcher, path) => {
-    watcher.close();
-    logger.info(`文件监听已停止: ${path}`);
-  });
-  watchers.clear();
+  for (const workspacePath of watchers.keys()) stopWatcher(workspacePath);
+}
+
+function stopWatcher(workspacePath: string): void {
+  const state = watchers.get(workspacePath);
+  if (!state) return;
+  if (state.rescanTimer) clearTimeout(state.rescanTimer);
+  state.directories.forEach((watcher) => watcher.close());
+  watchers.delete(workspacePath);
+  logger.info(`文件监听已停止: ${workspacePath}`);
 }
 
 // 判断是否应该忽略

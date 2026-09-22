@@ -1,5 +1,5 @@
 // 认证公共逻辑 — 桌面端(main) 与 Web 服务端(server) 共用
-// 纯逻辑，无 Electron / Express / 数据库依赖，可被两边同时引入。
+// 纯逻辑，不依赖 Electron 或数据库。
 
 import crypto from 'crypto';
 

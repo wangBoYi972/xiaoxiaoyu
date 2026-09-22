@@ -12,7 +12,7 @@ export interface Skill {
 }
 
 const BUILTIN_SKILLS: Skill[] = [
-  { id: 'general',    name: '通用助手',   description: '多领域智能问答',           icon: '🤖', category: 'utility',   systemPrompt: '',                                      version: '1.0' },
+  { id: 'general',    name: '通用助手',   description: '多领域智能问答',           icon: '🤖', category: 'utility',   systemPrompt: '你是一位可靠的通用助手。请先准确理解用户目标，再给出清晰、可执行且符合事实的回答；信息不足时说明假设或提出必要的澄清问题。', version: '1.0' },
   { id: 'coder',      name: '代码大师',   description: '编程、调试、架构设计、代码审查', icon: '💻', category: 'coding',    systemPrompt: '你是一位资深软件架构师，精通多种编程语言。请给出最佳实践、完整代码示例和注意事项，代码要规范有注释。', version: '1.0' },
   { id: 'translator', name: '翻译专家',   description: '中英日韩多语种精准翻译',   icon: '🌐', category: 'writing',   systemPrompt: '你是一位专业翻译，精通中英日韩等多国语言。请准确、流畅地翻译，保留原文的语气、风格和文化背景。', version: '1.0' },
   { id: 'writer',     name: '文案策划',   description: '营销文案、品牌策划、创意写作', icon: '✍️', category: 'writing',   systemPrompt: '你是一位资深文案策划，擅长品牌营销和创意写作。请用有感染力、符合品牌调性的中文撰写，注意读者心理和转化效果。', version: '1.0' },
@@ -44,6 +44,15 @@ const BUILTIN_SKILLS: Skill[] = [
 
 function isValidSkillId(id: string): boolean {
   return /^[a-zA-Z0-9_-]{1,64}$/.test(id) && !id.includes('..');
+}
+
+/** 确保导入的自定义技能也有可执行的模型行为，而非只显示一个名称。 */
+function withUsablePrompt(skill: Skill): Skill {
+  if (skill.systemPrompt?.trim()) return skill;
+  return {
+    ...skill,
+    systemPrompt: `你正在以「${skill.name}」技能协助用户。请围绕${skill.description || '用户的当前目标'}给出专业、清晰、可执行的回答；不要声称完成了未经实际执行的操作。`,
+  };
 }
 
 function getSkillsDir(): string {
@@ -97,7 +106,7 @@ function loadAllSkills(): Skill[] {
       } catch {}
     }
   } catch {}
-  return skills;
+  return skills.map(withUsablePrompt);
 }
 
 export function registerSkillsHandlers(): void {

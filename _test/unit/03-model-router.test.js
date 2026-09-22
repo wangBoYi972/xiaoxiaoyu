@@ -5,14 +5,14 @@
  */
 
 describe('模型路由 (ModelRouter)', () => {
-  let ModelRouter, getPresetModels;
+  let ModelRouter, supportsTools;
   let BaseModelAdapter;
 
   before(() => {
     // 直接加载编译后的模块
     const adapterModule = require('../../dist/adapters/index');
     ModelRouter = adapterModule.ModelRouter;
-    getPresetModels = adapterModule.getPresetModels;
+    supportsTools = adapterModule.supportsTools;
     BaseModelAdapter = require('../../dist/adapters/base-adapter').BaseModelAdapter;
   });
 
@@ -95,84 +95,12 @@ describe('模型路由 (ModelRouter)', () => {
   });
 });
 
-describe('预置模型列表 (getPresetModels)', () => {
-
-  it('Anthropic 应返回 3 个模型', () => {
-    const models = getPresetModels('anthropic');
-    assertEqual(models.length, 3);
-    assert(models.some(m => m.id === 'claude-opus-4-8'));
-    assert(models.some(m => m.id === 'claude-sonnet-5'));
-    assert(models.some(m => m.id === 'claude-haiku-4-5'));
-  });
-
-  it('DeepSeek 应返回 3 个模型', () => {
-    const models = getPresetModels('deepseek');
-    assertEqual(models.length, 3);
-    assert(models.some(m => m.id === 'deepseek-chat'));
-    assert(models.some(m => m.id === 'deepseek-reasoner'));
-    assert(models.some(m => m.id === 'deepseek-v3-0324'));
-  });
-
-  it('OpenAI 应返回多个模型', () => {
-    const models = getPresetModels('openai');
-    assert(models.length > 0, 'OpenAI 应有预置模型');
-    assert(models.some(m => m.id.startsWith('gpt-') || m.id.startsWith('o')));
-  });
-
-  it('Gemini 应返回 3 个模型', () => {
-    const models = getPresetModels('gemini');
-    assertEqual(models.length, 3);
-  });
-
-  it('ERNIE 应返回正确的模型', () => {
-    const models = getPresetModels('ernie');
-    assert(models.length > 0);
-    assert(models.every(m => m.id.startsWith('ernie-')));
-  });
-
-  it('Qwen 应返回 5 个模型', () => {
-    const models = getPresetModels('qwen');
-    assertEqual(models.length, 5);
-  });
-
-  it('GLM 应返回 3 个模型', () => {
-    const models = getPresetModels('glm');
-    assertEqual(models.length, 3);
-    assert(models.some(m => m.displayName.includes('免费')));
-  });
-
-  it('Moonshot 应返回 4 个模型', () => {
-    const models = getPresetModels('moonshot');
-    assertEqual(models.length, 4);
-    assert(models.some(m => m.id === 'kimi-latest'));
-  });
-
-  it('未知提供商应返回空数组', () => {
-    const models = getPresetModels('nonexistent-provider');
-    assertEqual(models.length, 0);
-    assert(Array.isArray(models));
-  });
-
-  it('所有模型都应包含必填字段', () => {
-    const allProviders = ['anthropic', 'openai', 'deepseek', 'qwen', 'glm', 'moonshot', 'gemini', 'ernie'];
-
-    for (const provider of allProviders) {
-      const models = getPresetModels(provider);
-      for (const model of models) {
-        assert(typeof model.id === 'string' && model.id.length > 0,
-          `${provider} 模型缺少 id`);
-        assert(typeof model.displayName === 'string' && model.displayName.length > 0,
-          `${provider}/${model.id} 缺少 displayName`);
-        assert(typeof model.provider === 'string',
-          `${provider}/${model.id} 缺少 provider`);
-        assert(typeof model.maxTokens === 'number' && model.maxTokens > 0,
-          `${provider}/${model.id} maxTokens 无效: ${model.maxTokens}`);
-        assert(typeof model.supportsVision === 'boolean',
-          `${provider}/${model.id} 缺少 supportsVision`);
-        assert(typeof model.supportsThinking === 'boolean',
-          `${provider}/${model.id} 缺少 supportsThinking`);
-      }
-    }
+describe('工具调用能力标记', () => {
+  it('仅已验证的模型可启用工具调用', () => {
+    assert(supportsTools('openai', 'gpt-4o'));
+    assert(supportsTools('deepseek', 'deepseek-chat'));
+    assert(!supportsTools('openai', 'unknown-model'));
+    assert(!supportsTools('custom_gateway', 'gpt-4o'));
   });
 });
 

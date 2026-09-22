@@ -41,7 +41,6 @@ export function App() {
       if (status.modelReady) {
         setOllamaReady(true);
         setOllamaSetupProgress('');
-        setActiveProvider('ollama');
       } else if (status.installed && !status.modelReady) {
         setOllamaSetupProgress('正在准备 AI 模型...');
       }
@@ -75,7 +74,6 @@ export function App() {
     api.checkOllamaStatus?.().then((s: any) => {
       if (s?.modelReady) {
         setOllamaReady(true);
-        setActiveProvider('ollama');
       }
     }).catch(() => {});
   }, [setActiveProvider]);
@@ -93,8 +91,8 @@ export function App() {
 
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemIsDark);
 
-  // 登录门：账号状态唯一真源在 auth-store（桌面端免登录，Web 端必须登录）
-  const needLogin = useAuthStore(s => s.loginVisible);
+  // 登录门：账号状态唯一真源在 auth-store。
+  const needLogin = useAuthStore(s => s.loginVisible || !s.user);
   const signIn = useAuthStore(s => s.signIn);
   useEffect(() => { useAuthStore.getState().init(); }, []);
   useEffect(() => {

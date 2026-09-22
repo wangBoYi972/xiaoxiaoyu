@@ -1,6 +1,6 @@
 {
   "name": "xiaoxiaoyu",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "小小榆 - 多模型AI桌面助手",
   "main": "dist/main/index.js",
   "scripts": {
@@ -18,23 +18,16 @@
     "pack:mac:arm64": "npm run build && electron-builder --mac --arm64",
     "pack:mac:x64": "npm run build && electron-builder --mac --x64",
     "pack:all": "npm run build && electron-builder --win --x64 --mac",
-    "server:dev": "tsx watch src/server/index.ts",
-    "server:build": "tsc -p tsconfig.server.json",
-    "server:start": "node dist/server/server/index.js",
-    "web:dev": "concurrently \"npm run dev:vite\" \"npm run server:dev\"",
-    "web:build": "npm run build:renderer && npm run server:build",
-    "web:start": "npm run server:start",
     "test": "npm run test:smoke",
-    "test:smoke": "tsx _test/auth-smoke.mts && node _test/agent-tools-sandbox.cjs && node _test/file-ipc-sandbox.cjs && node _test/crypto-smoke.cjs && node _test/openai-compat-check.cjs && tsx _test/log-and-guard-smoke.mts"
+    "test:smoke": "tsx _test/auth-smoke.mts && node _test/agent-tools-sandbox.cjs && node _test/file-ipc-sandbox.cjs && node _test/crypto-smoke.cjs && node _test/openai-compat-check.cjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "antd": "^5.22.0",
-    "compression": "^1.8.1",
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
     "highlight.js": "^11.10.0",
-    "jsonwebtoken": "^9.0.3",
+    "node-pty": "^1.1.0",
     "nodemailer": "^10.0.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -44,14 +37,9 @@
     "remark-gfm": "^4.0.0",
     "sql.js": "^1.11.0",
     "ssh2": "^1.17.0",
-    "svg-captcha": "^1.4.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@types/compression": "^1.8.1",
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/nodemailer": "^8.0.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -93,6 +81,7 @@
       }
     ],
     "asar": false,
+    "npmRebuild": false,
     "asarUnpack": [
       "node_modules/sql.js/**"
     ],

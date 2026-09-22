@@ -3,7 +3,7 @@ import { getDatabase, saveDatabase } from '../store/database';
 import { decryptApiKey } from '../store/crypto';
 import { logger } from '../utils/logger';
 import { randomUUID as uuidv4 } from 'crypto';
-import { ModelRouter } from '../../adapters/index';
+import { ModelRouter, supportsTools } from '../../adapters/index';
 import type { ToolDefinition } from '../../adapters/types';
 import { mcpManager } from './mcp.ipc';
 import { AgentRunner } from '../agent/agent-runner';
@@ -193,7 +193,14 @@ export function registerChatHandlers(): void {
       logger.info(`可用工具: ${tools.length} 个, agentMode=${!!agentMode}`);
 
       // Agent 模式校验工作区
-      const useAgent = !!agentMode;
+      const useAgent = !!agentMode && supportsTools(providerId, modelId);
+      if (agentMode && !useAgent) {
+        win.webContents.send('chat:stream-chunk', {
+          type: 'error',
+          error: { message: '当前模型未验证工具调用能力，只能用于问答', code: 'TOOLS_UNSUPPORTED' },
+        });
+        return;
+      }
       if (useAgent && (!workspacePath || !isWorkspaceApproved(workspacePath))) {
         win.webContents.send('chat:stream-chunk', {
           type: 'error',

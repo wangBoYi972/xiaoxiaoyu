@@ -44,6 +44,8 @@ export interface ModelInfo {
   maxTokens: number;
   supportsVision: boolean;
   supportsThinking: boolean;
+  /** 是否已验证可稳定使用本应用的工具调用协议 */
+  supportsTools?: boolean;
   pricing?: { input: number; output: number };
 }
 

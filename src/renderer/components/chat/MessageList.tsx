@@ -7,7 +7,7 @@ interface MessageListProps {
   isStreaming: boolean;
   onCopy?: (text: string) => void;
   onRegenerate?: (msg: ChatMessage) => void;
-  onPermissionRespond?: (id: string, d: 'allow' | 'allow-always' | 'deny') => void;
+  onPermissionRespond?: (id: string, d: 'allow' | 'deny') => void;
 }
 
 /**

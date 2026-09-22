@@ -131,4 +131,43 @@ export function registerSettingsHandlers(): void {
       return false;
     }
   });
+
+  /**
+   * 使用设置弹窗中尚未保存的 Key 拉取模型列表。
+   * Key 为空时沿用已加密保存的 Key，避免用户为了刷新模型重复粘贴密钥。
+   */
+  ipcMain.handle('provider:list-models', async (_event, draft: {
+    id?: string;
+    name?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    extraHeaders?: Record<string, string>;
+  }) => {
+    const id = typeof draft?.id === 'string' ? draft.id.trim() : '';
+    if (!id) return { success: false, error: '缺少提供商标识' };
+    try {
+      const existing = queryOne(
+        'SELECT api_key_enc, base_url, extra_headers_json FROM provider_configs WHERE id = ?',
+        [id]
+      );
+      const apiKey = draft.apiKey?.trim() || (existing?.api_key_enc ? decryptApiKey(existing.api_key_enc) : '');
+      let savedHeaders: Record<string, string> = {};
+      try { savedHeaders = existing?.extra_headers_json ? JSON.parse(existing.extra_headers_json) : {}; } catch { /* 忽略损坏的旧配置 */ }
+      const config = {
+        id,
+        name: draft.name?.trim() || id,
+        apiKey,
+        baseUrl: draft.baseUrl?.trim() || existing?.base_url || '',
+        enabled: true,
+        models: [],
+        extraHeaders: { ...savedHeaders, ...(draft.extraHeaders || {}) },
+      };
+      const models = await new ModelRouter().listModels(config);
+      if (!models.length) return { success: false, error: '未获取到模型，请检查 API 地址、Key 和模型列表权限' };
+      return { success: true, models };
+    } catch (error: any) {
+      logger.error('获取提供商模型失败', error);
+      return { success: false, error: error?.message || '获取模型失败' };
+    }
+  });
 }

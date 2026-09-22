@@ -1,6 +1,6 @@
 // 日志内核 — 桌面端(main) 与 Web 服务端(server) 共用
 // 能力：级别过滤、按天分文件、单文件超限滚动、超期自动清理。
-// 纯 Node 实现，不依赖 electron / express。
+// 纯 Node 实现，不依赖 Electron。
 
 import fs from 'fs';
 import path from 'path';

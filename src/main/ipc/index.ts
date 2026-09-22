@@ -10,8 +10,8 @@ import { registerAuthHandlers } from './auth.ipc';
 import { registerOllamaHandlers } from './ollama.ipc';
 import { registerWorkspaceHandlers } from './workspace.ipc';
 import { registerRunnerHandlers } from './runner.ipc';
+import { registerTerminalHandlers } from './terminal.ipc';
 import { registerRagHandlers } from './rag.ipc';
-import './finetune.ipc';
 
 export function registerIpcHandlers(): void {
   registerAuthHandlers();
@@ -25,5 +25,6 @@ export function registerIpcHandlers(): void {
   registerOllamaHandlers();
   registerWorkspaceHandlers();
   registerRunnerHandlers();
+  registerTerminalHandlers();
   registerRagHandlers();
 }

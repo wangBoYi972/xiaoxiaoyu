@@ -10,12 +10,11 @@ Electron 33 + React 18 + TypeScript + Ant Design 5 + Zustand + Vite 6
 ├── src/preload/    contextBridge 暴露的 API（renderer 与 main 的唯一通道）
 ├── src/renderer/   React 前端（玻璃设计系统 glass.css 是唯一样式真源）
 ├── src/adapters/   多模型适配层（统一 chunk 协议 / 超时 / 错误标准化）
-├── src/server/     Express Web 版（JWT 认证 + SSE 聊天，可独立部署）
-├── src/shared/     桌面端与 Web 端共用的纯逻辑（验证码/日志内核/校验/邮件模板）
-└── python/         QLoRA 微调链路
+├── src/shared/     桌面端共用的纯逻辑（验证码/日志内核/校验/邮件模板）
+└── _test/          桌面端回归与冒烟测试
 ```
 
-两端共用：`src/shared/*` 与 `src/adapters/*`（tsconfig.main / tsconfig.server 的 include 都要带上）。
+桌面主进程共用：`src/shared/*` 与 `src/adapters/*`（均由 `tsconfig.main.json` 编译）。
 
 ## 关键链路
 
@@ -31,7 +30,7 @@ InputArea ──sendChatMessage({agentMode, workspacePath})──► chat.ipc
 
 - 渲染层 `src/renderer/agent-bridge.ts` 消费 chunk：
   text/thinking → 有序 segments；tool-call/result → `ToolCallBlock` 卡片；
-  `agent:confirm-request` → `PermissionCard`（run_command 执行前必须用户确认）。
+  `agent:confirm-request` → `PermissionCard`（文件改动和 `run_command` 均须在执行前逐项确认）。
 - ⚠️ AgentRunner 内层循环**不能透传适配器的 done**（每轮都有），
   只能在整条循环结束时 yield 一次，否则工具执行被截断（3.0.7 修复的 P0）。
 - ⚠️ 适配器对 `tools` 的支持：openai-compat 完整；Ollama 已支持；
@@ -54,7 +53,7 @@ InputArea ──sendChatMessage({agentMode, workspacePath})──► chat.ipc
 ### 认证（QQ 邮箱）
 
 ```
-LoginPage ──api.*──► 桌面: auth.ipc / Web: /api/auth/*
+LoginPage ──api.*──► auth.ipc
     ├─ 登录：QQ 邮箱（或历史用户名 admin）+ PBKDF2 密码；失败 5 次指数退避封禁
     ├─ 注册：邮箱验证码（randomInt 生成、只存哈希、一次性、60s 重发、每日上限）
     │   └─ 首账号引导：库里没有任何用户时，首个注册免验证码并 role='admin'
@@ -62,7 +61,7 @@ LoginPage ──api.*──► 桌面: auth.ipc / Web: /api/auth/*
 ```
 
 - SMTP 发件配置存 settings 表（smtp_user / smtp_pass），界面在 设置 → 通用 → 邮件服务。
-- 游客模式已移除：所有端都必须登录。
+- 桌面端必须登录或注册后使用；账户是未来订阅权益、订单归属与跨设备备份的主体。
 
 ## 约定与坑（务必先读）
 
@@ -81,7 +80,7 @@ LoginPage ──api.*──► 桌面: auth.ipc / Web: /api/auth/*
 ## 验证
 
 ```bash
-npm test        # 5 个冒烟套件：认证 32 / Agent 沙箱 19 / 工作区授权 11 / 加密 14 / 日志与封禁 18
+npm test        # 5 个桌面端冒烟套件：认证、Agent 沙箱、工作区授权、加密与适配器
 npm run build   # renderer + main，0 TS 错误
 node _test/agent-loop-check.cjs   # Agent 多轮工具循环端到端（mock OpenAI 服务）
 node _test/app-protocol-check.cjs # app:// 协议 + Worker 可用性（需 env -u ELECTRON_RUN_AS_NODE）

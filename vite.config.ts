@@ -36,16 +36,5 @@ export default defineConfig({
       '@adapters': path.resolve(__dirname, 'src/adapters'),
     },
   },
-  server: {
-    port: 5173,
-    strictPort: true,
-    // Web 开发模式：前端在 5173、API 在 Express 服务端，需要代理 /api
-    // （桌面端走 IPC 不经过这里，加了无副作用）
-    proxy: {
-      '/api': {
-        target: `http://localhost:${process.env.PORT || 80}`,
-        changeOrigin: true,
-      },
-    },
-  },
+  server: { port: 5173, strictPort: true },
 });

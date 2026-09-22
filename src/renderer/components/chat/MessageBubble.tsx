@@ -34,7 +34,7 @@ interface Props {
   message: ChatMessageView;
   onCopy?: (text: string) => void;
   onRegenerate?: () => void;
-  onPermissionRespond?: (id: string, d: 'allow' | 'allow-always' | 'deny') => void;
+  onPermissionRespond?: (id: string, d: 'allow' | 'deny') => void;
 }
 
 const fmtTime = (ts?: number) => {

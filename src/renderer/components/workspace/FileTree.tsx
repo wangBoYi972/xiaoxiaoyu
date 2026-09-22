@@ -21,7 +21,7 @@ const FileTree: React.FC = () => {
 
   if (!workspace) {
     return (
-      <div style={{ padding: '16px', color: 'var(--text-quaternary)', textAlign: 'center', fontSize: 12 }}>
+      <div style={{ padding: '16px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: 12 }}>
         未打开工作区
       </div>
     );

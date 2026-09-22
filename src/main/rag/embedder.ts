@@ -234,7 +234,7 @@ export async function embed(texts: string[], cfg: EmbedConfig): Promise<EmbedRes
     return { vectors: [], dim: cfg.dim || DEFAULT_DIM, backend: 'local', label: 'local' };
   }
   const order: EmbedBackend[] =
-    cfg.backend === 'auto' || !cfg.backend ? ['ollama', 'openai', 'local'] : [cfg.backend];
+    cfg.backend === 'auto' || !cfg.backend ? ['ollama', 'openai'] : [cfg.backend];
 
   const errors: string[] = [];
   for (const backend of order) {

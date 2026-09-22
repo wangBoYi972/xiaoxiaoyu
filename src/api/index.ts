@@ -1,29 +1,19 @@
-// API 传输层入口 — 自动检测运行环境并导出对应实现
+// API 传输层入口 — 仅支持 Electron 桌面端 IPC。
 //
 // 使用方式：
 //   import api from '../api';
 //   await api.sendChatMessage({ ... });
 //
-// 检测逻辑：
-//   - 如果 window.electronAPI 存在 → IpcTransport（Electron 桌面）
-//   - 否则 → HttpTransport（浏览器/Web）
+// 不提供浏览器/Web 运行路径。
 
 import type { ApiTransport } from './transport';
 import { IpcTransport } from './ipc-transport';
-import { HttpTransport } from './http-transport';
 
-let api: ApiTransport;
-
-if (typeof window !== 'undefined' && (window as any).electronAPI) {
-  // Electron 桌面环境
-  api = new IpcTransport();
-  console.log('[api] 使用 IPC 传输（Electron）');
-} else {
-  // 浏览器/服务器 Web 环境
-  const httpTransport = new HttpTransport('/api');
-  api = httpTransport;
-  console.log('[api] 使用 HTTP 传输（Web）');
+if (typeof window === 'undefined' || !(window as any).electronAPI) {
+  throw new Error('小小榆仅支持通过桌面应用运行');
 }
+
+const api: ApiTransport = new IpcTransport();
 
 export default api;
 export type { ApiTransport, StreamChunk, Conversation, Message, ProviderConfig, ProviderSaveInput, FileData, FileFilter, SkillItem, UpdateInfo, UpdateProgress, Announcement } from './transport';

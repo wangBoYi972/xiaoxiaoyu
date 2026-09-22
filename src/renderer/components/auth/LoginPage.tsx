@@ -285,7 +285,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       if (!user) { message.error('服务端未返回用户信息'); return; }
 
       if (remember) saveRemembered(addr, password); else clearRemembered();
-      // Web 端 transport 已写入 auth_token，这里补一份兼容旧读取方
+      // 保留本地 token，兼容旧版本读取逻辑。
       if (res.token) localStorage.setItem('auth_token', res.token);
       localStorage.setItem('auth_user', JSON.stringify(user));
       if (isElectron) localStorage.setItem('desktop_user', JSON.stringify(user));
@@ -345,7 +345,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         </div>
       )}
 
-      {/* Web 版左侧品牌区 — 手机端隐藏 */}
+      {/* 登录页左侧品牌区，手机端隐藏 */}
       {!isElectron && !isMobile && (
         <div style={{ position: 'relative', zIndex: 2, width: 420, padding: '0 60px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>

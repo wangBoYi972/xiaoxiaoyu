@@ -1,5 +1,5 @@
 // 账号 / 登录状态 —— 唯一真源
-// 游客模式已按产品要求移除：桌面端与 Web 端都必须登录才能使用。
+// 桌面端必须登录或注册后才能使用，便于后续订阅权益与订单归属。
 import { create } from 'zustand';
 
 export interface AuthUser {
@@ -11,7 +11,7 @@ export interface AuthUser {
 interface AuthState {
   /** 登录页是否可见 */
   loginVisible: boolean;
-  /** 当前用户（null = 未登录 → 强制显示登录页） */
+  /** 当前用户（null = 尚未登录） */
   user: AuthUser | null;
   /** 应用启动时从本地恢复 */
   init: () => void;
@@ -19,12 +19,12 @@ interface AuthState {
   signIn: (user: AuthUser) => void;
   /** 打开登录页（防御性保留） */
   openLogin: () => void;
-  /** 退出登录：清凭据并回到登录页 */
+  /** 退出登录：清除本地凭据并回到登录页 */
   logout: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  loginVisible: false,
+  loginVisible: true,
   user: null,
 
   init: () => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Drawer, Tabs, Typography } from 'antd';
+import { Drawer, Tabs } from 'antd';
 import {
   SettingOutlined,
   ApiOutlined,
@@ -8,6 +8,7 @@ import {
   ThunderboltOutlined,
   BgColorsOutlined,
   DatabaseOutlined,
+  CloseOutlined,
 } from '@ant-design/icons';
 import { RagSettings } from './RagSettings';
 import { GeneralSettings } from './GeneralSettings';
@@ -22,15 +23,12 @@ import AppearanceSettings, {
 import type { WallpaperConfig } from '../layout/Wallpaper';
 import { useSettingsStore } from '../../stores/settings-store';
 
-const { Text } = Typography;
-
 interface SettingsDrawerProps {
   open: boolean;
   onClose: () => void;
-  onViewChange?: (view: 'chat' | 'finetune') => void;
 }
 
-export function SettingsDrawer({ open, onClose, onViewChange }: SettingsDrawerProps) {
+export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
   const bgImage = useSettingsStore((s) => s.bgImage);
   const bgOpacity = useSettingsStore((s) => s.bgOpacity);
   const setBgImage = useSettingsStore((s) => s.setBgImage);
@@ -94,8 +92,22 @@ export function SettingsDrawer({ open, onClose, onViewChange }: SettingsDrawerPr
         </div>
       }
       placement="right"
-      width={520}
+      width={Math.min(860, typeof window === 'undefined' ? 860 : Math.max(560, window.innerWidth - 24))}
       onClose={onClose}
+      closeIcon={
+        <button
+          type="button"
+          className="settings-drawer-close"
+          aria-label="关闭设置"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }}
+        >
+          <CloseOutlined />
+        </button>
+      }
       open={open}
       styles={{
         body: { padding: 0 },
@@ -104,9 +116,8 @@ export function SettingsDrawer({ open, onClose, onViewChange }: SettingsDrawerPr
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
-        tabPosition="top"
-        centered
-        size="large"
+        tabPosition="left"
+        size="middle"
         className="settings-tabs"
         items={[
           {

@@ -36,7 +36,7 @@ export interface RagConfig extends EmbedConfig {
 }
 
 export const DEFAULT_RAG_CONFIG: RagConfig = {
-  backend: 'auto',
+  backend: 'ollama',
   ollamaUrl: 'http://127.0.0.1:11434',
   ollamaModel: 'nomic-embed-text',
   endpoint: '',
@@ -47,7 +47,7 @@ export const DEFAULT_RAG_CONFIG: RagConfig = {
   chunkOverlap: 200,
   maxFileBytes: 512 * 1024,
   maxFiles: 3000,
-  autoInject: true,
+  autoInject: false,
   topK: 6,
 };
 

@@ -6,12 +6,6 @@ import type { UnifiedStreamChunk, ChatRequestOptions, ModelInfo, ProviderConfig 
  * 使用 Google Generative AI SDK REST API
  */
 export class GeminiAdapter extends BaseModelAdapter {
-  private static MODELS: ModelInfo[] = [
-    { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro (最强大)', provider: 'gemini', maxTokens: 2097152, supportsVision: true, supportsThinking: true },
-    { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash (推荐)', provider: 'gemini', maxTokens: 1048576, supportsVision: true, supportsThinking: true },
-    { id: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash (快速)', provider: 'gemini', maxTokens: 1048576, supportsVision: true, supportsThinking: false },
-  ];
-
   get baseUrl(): string {
     return this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta';
   }
@@ -28,7 +22,33 @@ export class GeminiAdapter extends BaseModelAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return GeminiAdapter.MODELS;
+    const response = await this.simpleFetch(`${this.baseUrl}/models?key=${encodeURIComponent(this.config.apiKey)}`);
+    if (!response.ok) {
+      throw new Error(`获取 Gemini 模型失败（HTTP ${response.status}），请检查 API Key 和模型列表权限`);
+    }
+    const data = await response.json() as {
+      models?: Array<{
+        name?: string;
+        displayName?: string;
+        inputTokenLimit?: number;
+        supportedGenerationMethods?: string[];
+      }>;
+    };
+    const models: Array<{ id: string; displayName?: string; maxTokens?: number }> = [];
+    for (const model of data.models || []) {
+      if (!model.supportedGenerationMethods?.includes('generateContent')) continue;
+      const id = model.name?.replace(/^models\//, '').trim();
+      if (id) models.push({ id, displayName: model.displayName?.trim(), maxTokens: model.inputTokenLimit });
+    }
+    if (!models.length) throw new Error('Gemini 未返回支持内容生成的模型');
+    return models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName || model.id,
+      provider: 'gemini',
+      maxTokens: model.maxTokens || 1048576,
+      supportsVision: true,
+      supportsThinking: model.id.includes('2.5') || model.id.includes('pro'),
+    }));
   }
 
   async *chat(options: ChatRequestOptions): AsyncGenerator<UnifiedStreamChunk> {

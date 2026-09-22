@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { getPresetModels } from '../../adapters/index';
+import { supportsTools } from '../../adapters/model-capabilities';
 import api from '../../api';
 
 interface ProviderConfig {
@@ -10,7 +10,7 @@ interface ProviderConfig {
 
 interface ModelInfo {
   id: string; displayName: string; provider: string; maxTokens: number;
-  supportsVision: boolean; supportsThinking: boolean; isFree?: boolean;
+  supportsVision: boolean; supportsThinking: boolean; supportsTools?: boolean; isFree?: boolean;
 }
 
 interface ModelStore {
@@ -58,7 +58,32 @@ function toModelInfo(id: string, providerId: string): ModelInfo {
     maxTokens: 32768,
     supportsVision: false,
     supportsThinking: false,
+    supportsTools: false,
   };
+}
+
+function toFetchedModelInfo(model: any, providerId: string): ModelInfo {
+  return {
+    id: String(model.id),
+    displayName: model.displayName || String(model.id),
+    provider: model.provider || providerId,
+    maxTokens: Number(model.maxTokens) || 32768,
+    supportsVision: !!model.supportsVision,
+    supportsThinking: !!model.supportsThinking,
+    supportsTools: supportsTools(providerId, String(model.id)),
+  };
+}
+
+async function loadModelsFromProvider(provider: ProviderConfig): Promise<ModelInfo[]> {
+  const bridge = window.electronAPI;
+  if (!bridge?.listProviderModels) return [];
+  const result = await bridge.listProviderModels({
+    id: provider.id,
+    name: provider.name,
+    baseUrl: provider.baseUrl,
+  });
+  if (!result?.success) throw new Error(result?.error || '未获取到模型');
+  return (result.models || []).map((model: any) => toFetchedModelInfo(model, provider.id));
 }
 
 /** 记住上次选择，重启后自动恢复（不写进数据库，仅本地偏好） */
@@ -215,15 +240,24 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
 
   setActiveProvider: (id) => {
-    // 内置预设 + 用户自己填过的模型 ID，一起进下拉
     const p = get().providers.find((x) => x.id === id);
-    const preset = getPresetModels(id);
-    const presetIds = new Set(preset.map((m) => m.id));
-    const extra = (p?.models || []).filter((m) => !presetIds.has(m)).map((m) => toModelInfo(m, id));
-    const models = [...preset, ...extra];
-
+    // 已保存模型只作 API 拉取前的短暂回显，绝不再使用写死的模型目录。
+    const models = (p?.models || []).map((modelId) => toModelInfo(modelId, id));
     set({ activeProviderId: id, availableModels: models, activeModelId: models[0]?.id || '' });
     saveActive(id, models[0]?.id || get().activeModelId);
+
+    if (!p || (!p.hasApiKey && p.id !== 'ollama')) return;
+    void loadModelsFromProvider(p)
+      .then((fetched) => {
+        if (get().activeProviderId !== id || fetched.length === 0) return;
+        const current = get().activeModelId;
+        const activeModelId = fetched.some((model) => model.id === current) ? current : fetched[0].id;
+        set({ availableModels: fetched, activeModelId });
+        saveActive(id, activeModelId);
+      })
+      .catch(() => {
+        // 拉取失败时保留用户此前保存的模型，错误由配置页的“获取模型”明确展示。
+      });
   },
 
   setActiveModel: (modelId) => {
@@ -232,7 +266,13 @@ export const useModelStore = create<ModelStore>((set, get) => ({
   },
 
   refreshModels: async (providerId: string) => {
-    try { await api.testProvider(providerId); } catch {}
-    set({ availableModels: getPresetModels(providerId) });
+    const provider = get().providers.find((item) => item.id === providerId);
+    if (!provider) return;
+    const models = await loadModelsFromProvider(provider);
+    if (get().activeProviderId !== providerId || models.length === 0) return;
+    const current = get().activeModelId;
+    const activeModelId = models.some((model) => model.id === current) ? current : models[0].id;
+    set({ availableModels: models, activeModelId });
+    saveActive(providerId, activeModelId);
   },
 }));

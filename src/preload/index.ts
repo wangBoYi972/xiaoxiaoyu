@@ -84,6 +84,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  // 真实交互终端（xterm 渲染 + 主进程 node-pty shell）
+  terminal: {
+    create: (data: { cwd: string; cols?: number; rows?: number }) => ipcRenderer.invoke('terminal:create', data),
+    write: (id: string, data: string) => ipcRenderer.send('terminal:write', { id, data }),
+    resize: (id: string, cols: number, rows: number) => ipcRenderer.send('terminal:resize', { id, cols, rows }),
+    close: (id: string) => ipcRenderer.send('terminal:close', id),
+    onData: (callback: (payload: { id: string; data: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; data: string }) => callback(payload);
+      ipcRenderer.on('terminal:data', handler);
+      return () => ipcRenderer.removeListener('terminal:data', handler);
+    },
+    onExit: (callback: (payload: { id: string; exitCode: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; exitCode: number }) => callback(payload);
+      ipcRenderer.on('terminal:exit', handler);
+      return () => ipcRenderer.removeListener('terminal:exit', handler);
+    },
+  },
+
   // 对话管理
   listConversations: (userId?: number | string) => ipcRenderer.invoke('conv:list', userId),
   getConversation: (id: string, userId?: number | string) => ipcRenderer.invoke('conv:get', id, userId),
@@ -112,6 +130,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }) => ipcRenderer.invoke('provider:save', config),
   deleteProvider: (id: string) => ipcRenderer.invoke('provider:delete', id),
   testProvider: (id: string) => ipcRenderer.invoke('provider:test', id),
+  listProviderModels: (draft: { id: string; name?: string; apiKey?: string; baseUrl?: string; extraHeaders?: Record<string, string> }) =>
+    ipcRenderer.invoke('provider:list-models', draft),
 
   // 文件操作
   openFileDialog: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) =>
@@ -215,13 +235,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:reset-password', data),
   getSmtpStatus: (userId?: number | string) => ipcRenderer.invoke('auth:smtp-status', userId),
   getRegistrationMode: () => ipcRenderer.invoke('auth:registration-mode'),
-  // 通用直通：仅开放 finetune: 前缀，避免把全部 IPC 暴露给渲染层
-  invoke: (channel: string, ...args: unknown[]) => {
-    if (typeof channel !== 'string' || !channel.startsWith('finetune:')) {
-      return Promise.resolve({ ok: false, error: `不允许的通道: ${channel}` });
-    }
-    return ipcRenderer.invoke(channel, ...args);
-  },
   setSmtpConfig: (cfg: { user?: string; pass?: string; host?: string; port?: number }, userId?: number | string) =>
     ipcRenderer.invoke('auth:set-smtp', cfg, userId),
 

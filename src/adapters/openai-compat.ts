@@ -7,13 +7,11 @@ import type { UnifiedStreamChunk, ChatRequestOptions, ModelInfo, ProviderConfig 
  * 包括：OpenAI、DeepSeek、通义千问、智谱GLM、Moonshot(Kimi) 等
  */
 export class OpenAICompatAdapter extends BaseModelAdapter {
-  private defaultModels: ModelInfo[];
   private defaultBaseUrl: string;
 
-  constructor(config: ProviderConfig, defaultBaseUrl: string, defaultModels: ModelInfo[]) {
+  constructor(config: ProviderConfig, defaultBaseUrl: string) {
     super(config);
     this.defaultBaseUrl = defaultBaseUrl;
-    this.defaultModels = defaultModels;
   }
 
   get baseUrl(): string {
@@ -28,63 +26,37 @@ export class OpenAICompatAdapter extends BaseModelAdapter {
     };
   }
 
-  /**
-   * 测试连接用的模型：优先用供应商配置的模型（models_json），
-   * 其次用预设列表，最后才回退。
-   * ⚠️ 原来固定写死 'deepseek-chat'：自定义中转站没这个模型会被判"连接失败"，
-   *    明明 Key 和地址都对（2026-09-20 solidapi 踩到）。
-   */
-  protected get testModel(): string {
-    return (this.config as any)?.models?.[0]?.id
-      || (this.config as any)?.models?.[0]
-      || this.defaultModels[0]?.id
-      || 'deepseek-chat';
-  }
-
   async validateApiKey(): Promise<boolean> {
     try {
-      const testResp = await this.simpleFetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: this.buildHeaders(),
-        body: JSON.stringify({
-          model: this.testModel,
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 1,
-        }),
-      });
-      // 200 → 连接成功
-      if (testResp.ok) return true;
-      // 400 → API 可访问但参数有误（模型名无效等），认证通过即算连通
-      if (testResp.status === 400) return true;
-      // 401/403 → API Key 无效
-      // 404 → API 地址错误
-      // 其他状态码 → 未知错误
-      return false;
+      // 模型列表既是实际下拉的数据源，也是最可靠的身份验证接口。
+      // 不再伪造某个预置模型发聊天请求，避免中转站因模型名不同被误判失败。
+      const response = await this.simpleFetch(`${this.baseUrl}/models`, { headers: this.buildHeaders() });
+      return response.ok;
     } catch {
       return false;
     }
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    try {
-      const response = await this.simpleFetch(`${this.baseUrl}/models`, { headers: this.buildHeaders() });
-      if (response.ok) {
-        const data = await response.json() as { data?: Array<{ id: string }> };
-        if (data.data) {
-          return data.data.map((m) => ({
-            id: m.id,
-            displayName: m.id,
-            provider: this.providerId,
-            maxTokens: 128000,
-            supportsVision: m.id.toLowerCase().includes('vision') || m.id.toLowerCase().includes('gpt-4o'),
-            supportsThinking: m.id.toLowerCase().includes('o1') || m.id.toLowerCase().includes('o3'),
-          }));
-        }
-      }
-    } catch {
-      // 获取模型失败，返回默认列表
+    const response = await this.simpleFetch(`${this.baseUrl}/models`, { headers: this.buildHeaders() });
+    if (!response.ok) {
+      throw new Error(`获取模型失败（HTTP ${response.status}），请检查 API 地址、Key 和模型列表权限`);
     }
-    return this.defaultModels;
+    const data = await response.json() as { data?: Array<{ id?: string }> };
+    const modelIds = data.data
+      ?.map((model) => model.id?.trim())
+      .filter((id): id is string => Boolean(id));
+    if (!modelIds?.length) {
+      throw new Error('接口未返回可选模型，请检查 API 地址是否为兼容的 /v1 端点');
+    }
+    return modelIds.map((id) => ({
+      id,
+      displayName: id,
+      provider: this.providerId,
+      maxTokens: 128000,
+      supportsVision: id.toLowerCase().includes('vision') || id.toLowerCase().includes('gpt-4o'),
+      supportsThinking: id.toLowerCase().includes('o1') || id.toLowerCase().includes('o3'),
+    }));
   }
 
   async *chat(options: ChatRequestOptions): AsyncGenerator<UnifiedStreamChunk> {
@@ -260,42 +232,3 @@ export class OpenAICompatAdapter extends BaseModelAdapter {
     return messages;
   }
 }
-
-// 预定义的各提供商默认配置
-
-export const OPENAI_MODELS: ModelInfo[] = [
-  { id: 'gpt-4o', displayName: 'GPT-4o', provider: 'openai', maxTokens: 128000, supportsVision: true, supportsThinking: false },
-  { id: 'gpt-4o-mini', displayName: 'GPT-4o Mini', provider: 'openai', maxTokens: 128000, supportsVision: true, supportsThinking: false },
-  { id: 'gpt-4.1', displayName: 'GPT-4.1', provider: 'openai', maxTokens: 1048576, supportsVision: true, supportsThinking: false },
-  { id: 'gpt-4.1-mini', displayName: 'GPT-4.1 Mini', provider: 'openai', maxTokens: 1048576, supportsVision: true, supportsThinking: false },
-  { id: 'o3', displayName: 'o3', provider: 'openai', maxTokens: 200000, supportsVision: true, supportsThinking: true },
-  { id: 'o4-mini', displayName: 'o4-mini', provider: 'openai', maxTokens: 200000, supportsVision: true, supportsThinking: true },
-  { id: 'o1', displayName: 'o1', provider: 'openai', maxTokens: 200000, supportsVision: true, supportsThinking: true },
-];
-
-export const DEEPSEEK_MODELS: ModelInfo[] = [
-  { id: 'deepseek-chat', displayName: 'DeepSeek-V4 Pro (最新旗舰)', provider: 'deepseek', maxTokens: 131072, supportsVision: true, supportsThinking: true },
-  { id: 'deepseek-reasoner', displayName: 'DeepSeek-R1-0528 (推理)', provider: 'deepseek', maxTokens: 65536, supportsVision: false, supportsThinking: true },
-  { id: 'deepseek-v3-0324', displayName: 'DeepSeek-V3-0324', provider: 'deepseek', maxTokens: 65536, supportsVision: false, supportsThinking: false },
-];
-
-export const QWEN_MODELS: ModelInfo[] = [
-  { id: 'qwen3-max', displayName: '通义千问3-Max (最新)', provider: 'qwen', maxTokens: 131072, supportsVision: true, supportsThinking: true },
-  { id: 'qwen3-plus', displayName: '通义千问3-Plus', provider: 'qwen', maxTokens: 131072, supportsVision: true, supportsThinking: false },
-  { id: 'qwen-max', displayName: '通义千问2.5-Max', provider: 'qwen', maxTokens: 32768, supportsVision: true, supportsThinking: false },
-  { id: 'qwen-plus', displayName: '通义千问2.5-Plus', provider: 'qwen', maxTokens: 131072, supportsVision: true, supportsThinking: false },
-  { id: 'qwen-turbo', displayName: '通义千问-Turbo', provider: 'qwen', maxTokens: 131072, supportsVision: false, supportsThinking: false },
-];
-
-export const GLM_MODELS: ModelInfo[] = [
-  { id: 'glm-4.5', displayName: 'GLM-4.5 (最新)', provider: 'glm', maxTokens: 128000, supportsVision: true, supportsThinking: true },
-  { id: 'glm-4-plus', displayName: 'GLM-4-Plus', provider: 'glm', maxTokens: 128000, supportsVision: true, supportsThinking: false },
-  { id: 'glm-4-flash', displayName: 'GLM-4-Flash (免费)', provider: 'glm', maxTokens: 128000, supportsVision: true, supportsThinking: false },
-];
-
-export const MOONSHOT_MODELS: ModelInfo[] = [
-  { id: 'moonshot-v1-8k', displayName: 'Kimi 8K', provider: 'moonshot', maxTokens: 8192, supportsVision: false, supportsThinking: false },
-  { id: 'moonshot-v1-32k', displayName: 'Kimi 32K', provider: 'moonshot', maxTokens: 32768, supportsVision: false, supportsThinking: false },
-  { id: 'moonshot-v1-128k', displayName: 'Kimi 128K', provider: 'moonshot', maxTokens: 131072, supportsVision: false, supportsThinking: false },
-  { id: 'kimi-latest', displayName: 'Kimi Latest (最新)', provider: 'moonshot', maxTokens: 131072, supportsVision: false, supportsThinking: false },
-];

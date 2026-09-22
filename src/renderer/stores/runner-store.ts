@@ -45,6 +45,14 @@ export interface ProjectDetect {
   label: string;
   files: string[];
   commands: ProjectCommand[];
+  startupClasses: JavaStartupClass[];
+}
+
+export interface JavaStartupClass {
+  className: string;
+  filePath: string;
+  module?: string;
+  springBoot: boolean;
 }
 
 /** 最多保留的输出行数（防长跑 dev server 撑爆内存） */
@@ -147,6 +155,50 @@ function flushPartials(emit: (kind: RunnerLine['kind'], text: string) => void): 
 }
 
 const electron = () => (window as any).electronAPI?.runner;
+
+/* ---- 命令历史（会话级，供终端输入框 ↑/↓ 回溯，仿真实 shell）---- */
+const commandHistory: string[] = [];
+let historyIndex = -1;
+let historyDraft = '';
+
+/** 启动过的命令进历史；去重、上限 100 条 */
+export function pushCommandHistory(cmd: string): void {
+  const c = cmd.trim();
+  if (!c) return;
+  const dup = commandHistory.lastIndexOf(c);
+  if (dup >= 0) commandHistory.splice(dup, 1);
+  commandHistory.push(c);
+  if (commandHistory.length > 100) commandHistory.shift();
+  historyIndex = -1;
+  historyDraft = '';
+}
+
+/**
+ * ↑/↓ 在历史间移动，返回要回填的命令；没有可移动方向时返回 null。
+ * 第一次 ↑ 会暂存当前草稿，↓ 走到底时恢复。
+ */
+export function navigateCommandHistory(direction: -1 | 1, currentDraft: string): string | null {
+  if (!commandHistory.length) return null;
+  if (direction === -1) {
+    if (historyIndex === -1) {
+      historyDraft = currentDraft;
+      historyIndex = commandHistory.length - 1;
+    } else if (historyIndex > 0) {
+      historyIndex -= 1;
+    } else {
+      return commandHistory[historyIndex];
+    }
+  } else {
+    if (historyIndex === -1) return null;
+    if (historyIndex < commandHistory.length - 1) {
+      historyIndex += 1;
+    } else {
+      historyIndex = -1;
+      return historyDraft;
+    }
+  }
+  return commandHistory[historyIndex];
+}
 
 export const useRunnerStore = create<RunnerState>((set, get) => ({
   running: false,
@@ -255,6 +307,7 @@ export const useRunnerStore = create<RunnerState>((set, get) => ({
           label: res.label || '未识别项目',
           files: res.files || [],
           commands: res.commands || [],
+          startupClasses: res.startupClasses || [],
         };
         set({ detect, selectedCommandId: detect.commands[0]?.id || '', detecting: false });
       } else {
@@ -305,8 +358,9 @@ export const useRunnerStore = create<RunnerState>((set, get) => ({
       return;
     }
 
-    // 启动前清掉旧输出，保持面板聚焦本次运行
+    // 启动前清掉旧输出，保持面板聚焦本次运行；命令进历史供 ↑/↓ 回溯
     set({ lines: [], running: true });
+    pushCommandHistory(command || `npm run ${script}`);
     try {
       const res = await runner.start({ script, cwd, command });
       if (!res?.success) {

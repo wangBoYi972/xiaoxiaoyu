@@ -107,7 +107,7 @@ const server = http.createServer((req, res) => {
   ok('没有任何 error chunk', errors.length === 0, JSON.stringify(errors).slice(0, 150));
 
   fs.rmSync(workspace, { recursive: true, force: true });
-  server.close();
+  await new Promise((resolve) => server.close(resolve));
   console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);
-  process.exit(fail === 0 ? 0 : 1);
+  process.exitCode = fail === 0 ? 0 : 1;
 })().catch(e => { console.error('ERROR:', e); process.exit(1); });

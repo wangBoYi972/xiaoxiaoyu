@@ -32,7 +32,7 @@ const server = http.createServer((req, res) => {
   const port = server.address().port;
   const adapter = new OpenAICompatAdapter(
     { id: 'mock', name: 'mock', apiKey: 'k', baseUrl: `http://127.0.0.1:${port}/v1`, enabled: true, models: [] },
-    `http://127.0.0.1:${port}/v1`, []
+    `http://127.0.0.1:${port}/v1`
   );
 
   console.log('— 普通流式对话 —');
@@ -54,7 +54,7 @@ const server = http.createServer((req, res) => {
 
   console.log('— Agent 工具调用（finish_reason=tool_calls） —');
   // 让 mock 下一轮改成返回 tool_calls
-  server.close();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   const server2 = http.createServer((req, res) => {
     let body = '';
     req.on('data', (d) => { body += d; });
@@ -73,7 +73,7 @@ const server = http.createServer((req, res) => {
   const port2 = server2.address().port;
   const adapter2 = new OpenAICompatAdapter(
     { id: 'mock', name: 'mock', apiKey: 'k', baseUrl: `http://127.0.0.1:${port2}/v1`, enabled: true, models: [] },
-    `http://127.0.0.1:${port2}/v1`, []
+    `http://127.0.0.1:${port2}/v1`
   );
   const tools = [{ name: 'read_file', description: '读文件', parameters: { type: 'object', properties: { path: { type: 'string' } } } }];
   text = ''; dones = 0; toolCalls = 0;
@@ -97,7 +97,7 @@ const server = http.createServer((req, res) => {
   ok('assistant.toolCalls 历史带回', lastBody.messages.some((m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls[0]?.function?.name === 'read_file'));
   ok('tool 结果消息按 role:tool + tool_call_id 回传', lastBody.messages.some((m) => m.role === 'tool' && m.tool_call_id === 'call_9' && m.content === '文件内容'));
 
-  server2.close();
+  await new Promise((resolve, reject) => server2.close((error) => error ? reject(error) : resolve()));
   console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);
-  process.exit(fail === 0 ? 0 : 1);
-})().catch((e) => { console.error('ERROR:', e); process.exit(1); });
+  process.exitCode = fail === 0 ? 0 : 1;
+})().catch((e) => { console.error('ERROR:', e); process.exitCode = 1; });

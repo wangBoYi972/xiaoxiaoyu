@@ -10,7 +10,7 @@ import { logger } from '../utils/logger';
 export interface ToolContext {
   /** 工作区根目录（沙箱边界） */
   cwd: string;
-  /** 命令执行前请求用户确认（由 chat.ipc 提供渲染进程弹窗实现） */
+  /** 有副作用的工具执行前请求用户确认（由 chat.ipc 提供渲染进程弹窗实现） */
   requestConfirm?: (title: string, detail: string) => Promise<boolean>;
 }
 
@@ -44,6 +44,49 @@ function decodeOutput(buf: Buffer): string {
 function truncate(text: string, max = MAX_OUTPUT_CHARS): string {
   if (text.length <= max) return text;
   return text.slice(0, max) + `\n... (已截断，总长 ${text.length} 字符)`;
+}
+
+function previewChange(filePath: string, before: string | null, after: string): string {
+  const limit = 12_000;
+  const beforeLines = before?.split(/\r?\n/) ?? [];
+  const afterLines = after.split(/\r?\n/);
+  let prefix = 0;
+  while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix++;
+
+  let suffix = 0;
+  while (
+    suffix < beforeLines.length - prefix
+    && suffix < afterLines.length - prefix
+    && beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]
+  ) suffix++;
+
+  const context = 3;
+  const prefixStart = Math.max(0, prefix - context);
+  const beforeEnd = beforeLines.length - suffix;
+  const afterEnd = afterLines.length - suffix;
+  const suffixEnd = Math.min(afterLines.length, afterEnd + context);
+  const lines = [
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    before === null ? '@@ 新建文件 @@' : '@@ 待应用改动 @@',
+    ...afterLines.slice(prefixStart, prefix).map((line) => ` ${line}`),
+    ...beforeLines.slice(prefix, beforeEnd).map((line) => `-${line}`),
+    ...afterLines.slice(prefix, afterEnd).map((line) => `+${line}`),
+    ...afterLines.slice(afterEnd, suffixEnd).map((line) => ` ${line}`),
+  ];
+  const preview = lines.join('\n');
+  return preview.length > limit ? `${preview.slice(0, limit)}\n…（diff 预览已截断）` : preview;
+}
+
+async function writeAtomically(filePath: string, content: string): Promise<void> {
+  const tempPath = `${filePath}.xxy-${process.pid}-${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, content, 'utf8');
+  try {
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw error;
+  }
 }
 
 // ============ 工具定义 ============
@@ -222,8 +265,16 @@ async function toolReadFile(ctx: ToolContext, args: any) {
 async function toolWriteFile(ctx: ToolContext, args: any) {
   if (!args.path || typeof args.content !== 'string') throw new Error('缺少 path 或 content 参数');
   const filePath = resolveSafe(ctx.cwd, args.path);
+  let before: string | null = null;
+  try { before = await fs.readFile(filePath, 'utf8'); } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  if (ctx.requestConfirm) {
+    const allowed = await ctx.requestConfirm('应用文件改动', previewChange(args.path, before, args.content));
+    if (!allowed) return { success: false, output: '用户拒绝了文件改动' };
+  }
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, args.content, 'utf8');
+  await writeAtomically(filePath, args.content);
   logger.info(`Agent 写入文件: ${filePath}`);
   return { success: true, output: `已写入 ${args.path}（${args.content.length} 字符）` };
 }
@@ -248,7 +299,11 @@ async function toolEditFile(ctx: ToolContext, args: any) {
   const updated = args.replace_all
     ? content.split(oldStr).join(newStr)
     : content.replace(oldStr, newStr);
-  await fs.writeFile(filePath, updated, 'utf8');
+  if (ctx.requestConfirm) {
+    const allowed = await ctx.requestConfirm('应用文件改动', previewChange(p, content, updated));
+    if (!allowed) return { success: false, output: '用户拒绝了文件改动' };
+  }
+  await writeAtomically(filePath, updated);
   logger.info(`Agent 编辑文件: ${filePath}`);
   return { success: true, output: `已编辑 ${p}（替换 ${args.replace_all ? count : 1} 处）` };
 }

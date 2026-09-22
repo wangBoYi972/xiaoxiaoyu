@@ -1,5 +1,5 @@
 // API 传输层接口定义
-// 所有方法签名，对应 preload/index.ts 中的 electronAPI（桌面端）与 /api/* 路由（Web 端）
+// 所有方法签名对应 preload/index.ts 中的 electronAPI（桌面端）。
 
 import type { ImageAttachment } from '../renderer/stores/chat-store';
 import type { FileNode } from '../renderer/stores/workspace-store';
@@ -39,7 +39,7 @@ export interface AuthResult {
   code?: string;
   message?: string;
   user?: AuthUser;
-  /** 仅 Web 端返回 */
+  /** 远程公告数据 */
   token?: string;
 }
 
@@ -52,7 +52,7 @@ export interface SmtpStatus {
   smtpPort?: number;
 }
 
-/** 工作区（本地文件系统）能力；Web 端为降级实现 */
+/** 工作区（本地文件系统）能力 */
 export interface OpenedWorkspace {
   path: string;
   name: string;
@@ -254,7 +254,7 @@ export interface ApiTransport {
   markAnnouncementRead(id: string): Promise<void>;
   showAnnouncements(): Promise<void>;
 
-  // ========== Auth（桌面端走 IPC，Web 端走 /api/auth/*） ==========
+  // ========== Auth（桌面端 IPC） ==========
   /** 邮箱 + 密码登录 */
   authLogin(data: { username: string; password: string }): Promise<AuthResult>;
   /** QQ 邮箱注册（需邮箱验证码） */
@@ -265,13 +265,11 @@ export interface ApiTransport {
   resetPassword(data: { email: string; code: string; newPassword: string }): Promise<AuthResult>;
   /** 发件邮箱（SMTP）配置状态 */
   getSmtpStatus(): Promise<SmtpStatus>;
-  /** 保存 SMTP 配置（仅桌面端实现，Web 端走设置接口） */
+  /** 保存 SMTP 配置 */
   setSmtpConfig(cfg: { user?: string; pass?: string; host?: string; port?: number }): Promise<AuthResult>;
   /** 注册模式：库里还没有账号时，首个注册免验证码（自动成为管理员） */
   getRegistrationMode(): Promise<{ firstAccount: boolean }>;
-  /** 通用 IPC 直通（桌面端仅允许 finetune: 前缀的通道） */
-  invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
-  /** Web 端：退出登录（清除本地 token） */
+  /** 退出登录 */
   logout?(): void;
 
   // ========== Skills ==========

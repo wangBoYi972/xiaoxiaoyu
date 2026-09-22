@@ -10,7 +10,11 @@ import {
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { disposeModelFor } from '../../editor/editor-registry';
 
-const TabBar: React.FC = () => {
+interface TabBarProps {
+  onSelect?: () => void;
+}
+
+const TabBar: React.FC<TabBarProps> = ({ onSelect }) => {
   const { tabs, activeTabId, setActiveTab, removeTab } = useWorkspaceStore();
 
   if (tabs.length === 0) {
@@ -77,7 +81,11 @@ const TabBar: React.FC = () => {
         type="line"
         activeKey={activeTabId || undefined}
         items={items}
-        onChange={setActiveTab}
+        onChange={(tabId) => {
+          setActiveTab(tabId);
+          onSelect?.();
+        }}
+        onTabClick={() => onSelect?.()}
         size="small"
         style={{ margin: 0 }}
         tabBarStyle={{

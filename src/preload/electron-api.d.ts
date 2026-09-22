@@ -67,6 +67,16 @@ export interface ElectronAPI {
     onFileChange: (callback: (event: { type: string; path: string }) => void) => () => void;
   };
 
+  // ========== 真实交互终端 ==========
+  terminal: {
+    create: (data: { cwd: string; cols?: number; rows?: number }) => Promise<IpcResult & { id?: string; shell?: string }>;
+    write: (id: string, data: string) => void;
+    resize: (id: string, cols: number, rows: number) => void;
+    close: (id: string) => void;
+    onData: (callback: (payload: { id: string; data: string }) => void) => () => void;
+    onExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void;
+  };
+
   // ========== File ==========
   file: {
     read: (filePath: string) => Promise<IpcResult & { data?: string; mimeType?: string; name?: string }>;
@@ -96,6 +106,11 @@ export interface ElectronAPI {
   saveProvider: (config: ProviderConfig) => Promise<void>;
   deleteProvider: (id: string) => Promise<void>;
   testProvider: (id: string) => Promise<boolean>;
+  listProviderModels: (draft: { id: string; name?: string; apiKey?: string; baseUrl?: string; extraHeaders?: Record<string, string> }) => Promise<{
+    success: boolean;
+    error?: string;
+    models?: Array<{ id: string; displayName: string; provider: string; maxTokens: number; supportsVision: boolean; supportsThinking: boolean }>;
+  }>;
 
   openFileDialog: (options?: { filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string[]>;
   readFile: (filePath: string) => Promise<{ data: string; mimeType: string; name: string }>;
@@ -137,7 +152,6 @@ export interface ElectronAPI {
   resetPassword: (data: { email: string; code: string; newPassword: string }) => Promise<AuthResult>;
   getSmtpStatus: (userId?: number | string) => Promise<{ configured: boolean; smtpUser?: string; smtpHost?: string; smtpPort?: number }>;
   getRegistrationMode: () => Promise<{ firstAccount: boolean }>;
-  invoke: (channel: string, ...args: unknown[]) => Promise<unknown>;
   setSmtpConfig: (cfg: { user?: string; pass?: string; host?: string; port?: number }) => Promise<AuthResult & { configured?: boolean }>;
 
   // ========== Ollama（桌面本地模式） ==========

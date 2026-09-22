@@ -190,12 +190,6 @@ export class IpcTransport implements ApiTransport {
   async getRegistrationMode(): Promise<{ firstAccount: boolean }> {
     return this.api.getRegistrationMode?.() ?? { firstAccount: false };
   }
-  async invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
-    const fn = (this.api as any).invoke;
-    if (typeof fn !== 'function') throw new Error('当前版本不支持该功能');
-    return fn.call(this.api, channel, ...args) as Promise<T>;
-  }
-
   // ========== Skills ==========
   async listSkills(): Promise<SkillItem[]> { return this.api.listSkills(); }
   async remoteSkillCatalog(): Promise<{ success: boolean; error?: string; skills: SkillItem[] }> {

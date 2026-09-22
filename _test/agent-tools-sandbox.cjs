@@ -34,7 +34,14 @@ fs.mkdirSync(path.join(workspace, 'src'), { recursive: true });
 fs.writeFileSync(path.join(workspace, 'src', 'a.txt'), 'hello world\nsecond line\n', 'utf8');
 fs.writeFileSync(path.join(root, 'outside.txt'), 'SECRET', 'utf8');
 
-const ctx = { cwd: workspace, requestConfirm: async () => true };
+const confirmations = [];
+const ctx = {
+  cwd: workspace,
+  requestConfirm: async (title, detail) => {
+    confirmations.push({ title, detail });
+    return true;
+  },
+};
 
 (async () => {
   console.log('— 工具定义 —');
@@ -59,10 +66,18 @@ const ctx = { cwd: workspace, requestConfirm: async () => true };
   ok('工作区内读取成功', r.success && /hello world/.test(r.output), r.output?.slice(0, 80));
   r = await executeBuiltinTool('write_file', { path: 'src/b.txt', content: 'created' }, ctx);
   ok('工作区内写入成功', r.success && fs.readFileSync(path.join(workspace, 'src', 'b.txt'), 'utf8') === 'created');
+  ok('新建文件先展示统一 diff', confirmations.at(-1)?.title === '应用文件改动' && /--- a\/src\/b\.txt/.test(confirmations.at(-1)?.detail) && /\+created/.test(confirmations.at(-1)?.detail), confirmations.at(-1)?.detail);
   r = await executeBuiltinTool('edit_file', { path: 'src/a.txt', old_string: 'hello world', new_string: 'HELLO' }, ctx);
   ok('edit_file 精确替换', r.success && /HELLO/.test(fs.readFileSync(path.join(workspace, 'src', 'a.txt'), 'utf8')), r.output);
+  ok('编辑文件先展示增删 diff', /-hello world/.test(confirmations.at(-1)?.detail) && /\+HELLO/.test(confirmations.at(-1)?.detail), confirmations.at(-1)?.detail);
   r = await executeBuiltinTool('edit_file', { path: 'src/a.txt', old_string: '不存在的字符串', new_string: 'x' }, ctx);
   ok('edit_file 未命中时失败', !r.success, r.output);
+  const deniedCtx = { cwd: workspace, requestConfirm: async () => false };
+  r = await executeBuiltinTool('write_file', { path: 'src/rejected.txt', content: 'nope' }, deniedCtx);
+  ok('拒绝后不创建文件', !r.success && !fs.existsSync(path.join(workspace, 'src', 'rejected.txt')), r.output);
+  const beforeDeniedEdit = fs.readFileSync(path.join(workspace, 'src', 'a.txt'), 'utf8');
+  r = await executeBuiltinTool('edit_file', { path: 'src/a.txt', old_string: 'HELLO', new_string: 'NOPE' }, deniedCtx);
+  ok('拒绝后不修改文件', !r.success && fs.readFileSync(path.join(workspace, 'src', 'a.txt'), 'utf8') === beforeDeniedEdit, r.output);
   r = await executeBuiltinTool('list_dir', { path: 'src' }, ctx);
   ok('list_dir 列出内容', r.success && /a\.txt/.test(r.output), r.output?.slice(0, 80));
   r = await executeBuiltinTool('search_files', { query: 'a.txt', path: '.' }, ctx);

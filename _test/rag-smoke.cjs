@@ -42,9 +42,10 @@ const ok3 = toks.includes('向量') && toks.includes('量检') && toks.includes(
 console.log('[3]', ok3 ? 'PASS' : 'FAIL');
 pass = pass && ok3;
 
-// 4) Ollama 可用性（不可用会自动降级 local，不算失败）
+// 4) Ollama embedding 是可选依赖。未安装时应用会明确显示为不可用，
+// 不再静默降级为“语义检索”。
 probeBackend({ backend: 'ollama', ollamaUrl: 'http://127.0.0.1:11434', ollamaModel: 'nomic-embed-text' })
   .then((r) => console.log('[4] Ollama embedding 可用 →', JSON.stringify(r)))
-  .catch((e) => console.log('[4] Ollama 不可用（自动降级 local）:', e.message));
+  .catch((e) => console.log('[4] Ollama embedding 未安装（设置页可手动拉取）:', e.message));
 
 console.log('== 总计 ==', pass ? 'PASS' : 'FAIL');

@@ -41,6 +41,8 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // 内置浏览器使用独立、无 Node 权限的访客渲染进程，避免站点的 iframe 限制。
+      webviewTag: true,
     },
   });
 

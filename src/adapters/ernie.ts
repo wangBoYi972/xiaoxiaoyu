@@ -10,12 +10,6 @@ export class ERNIEAdapter extends BaseModelAdapter {
   private tokenExpiry: number = 0;
   private tokenRefreshPromise: Promise<string> | null = null;
 
-  private static MODELS: ModelInfo[] = [
-    { id: 'ernie-4.0-turbo-128k', displayName: 'ERNIE 4.0 Turbo 128K', provider: 'ernie', maxTokens: 131072, supportsVision: false, supportsThinking: false },
-    { id: 'ernie-4.5-8k', displayName: 'ERNIE 4.5 8K', provider: 'ernie', maxTokens: 8192, supportsVision: false, supportsThinking: true },
-    { id: 'ernie-speed-128k', displayName: 'ERNIE Speed 128K', provider: 'ernie', maxTokens: 131072, supportsVision: false, supportsThinking: false },
-  ];
-
   get baseUrl(): string {
     return this.config.baseUrl || 'https://aip.baidubce.com';
   }
@@ -72,7 +66,9 @@ export class ERNIEAdapter extends BaseModelAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return ERNIEAdapter.MODELS;
+    // 千帆当前接口不会按 API Key 返回可调用模型清单，不能伪造静态列表。
+    // 用户需按其控制台已开通的模型 ID 手动录入。
+    return [];
   }
 
   async *chat(options: ChatRequestOptions): AsyncGenerator<UnifiedStreamChunk> {

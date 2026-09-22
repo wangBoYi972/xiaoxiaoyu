@@ -3,10 +3,10 @@ import { Button } from 'antd';
 import { SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
 
 /**
- * 权限确认卡片 — Agent 要执行敏感操作（写文件 / 跑命令）时弹出，等用户批准。
+ * 权限确认卡片 — Agent 要执行副作用操作（写文件 / 跑命令）时弹出，等用户逐项批准。
  * 交互：
- *   - 允许一次 / 本会话总是允许 / 拒绝
- *   - 60s 无响应自动拒绝（主进程侧兜底，这里只做倒计时展示）
+ *   - 允许一次 / 拒绝
+ *   - 180s 无响应自动拒绝（主进程侧兜底，这里只做倒计时展示）
  */
 
 export interface PermissionRequest {
@@ -25,7 +25,7 @@ export interface PermissionRequest {
 
 interface Props {
   request: PermissionRequest;
-  onRespond: (id: string, decision: 'allow' | 'allow-always' | 'deny') => void;
+  onRespond: (id: string, decision: 'allow' | 'deny') => void;
 }
 
 const PermissionCard: React.FC<Props> = ({ request, onRespond }) => {
@@ -44,12 +44,13 @@ const PermissionCard: React.FC<Props> = ({ request, onRespond }) => {
     return () => clearInterval(t);
   }, [request.expiresAt, done]);
 
-  const respond = (d: 'allow' | 'allow-always' | 'deny') => {
+  const respond = (d: 'allow' | 'deny') => {
     if (done) return;
     setDone(true);
     onRespond(request.id, d);
   };
 
+  const isFileChange = request.tool === 'edit_file' || request.tool === 'write_file';
   const high = request.risk === 'high';
 
   return (
@@ -71,14 +72,13 @@ const PermissionCard: React.FC<Props> = ({ request, onRespond }) => {
         {high && <span className="perm-risk-tag">· 高风险操作</span>}
       </div>
 
-      {request.detail && <div className="perm-cmd">{request.detail}</div>}
+      {request.detail && <div className={isFileChange ? 'perm-diff' : 'perm-cmd'}>{request.detail}</div>}
 
       {done ? (
         <div className="perm-done">已处理，等待 Agent 继续…</div>
       ) : (
         <div className="perm-actions">
           <Button type="primary" size="small" onClick={() => respond('allow')}>允许一次</Button>
-          <Button size="small" onClick={() => respond('allow-always')}>本会话总是允许</Button>
           <Button size="small" danger onClick={() => respond('deny')}>拒绝</Button>
         </div>
       )}

@@ -243,6 +243,40 @@ function defineThemes(monaco: typeof MonacoNS) {
   });
 }
 
+/**
+ * 开启编辑器内置的 JS/TS 诊断。
+ *
+ * Vue SFC 使用 HTML language mode：Monaco 的 HTML worker 会继续识别
+ * <script> / <style> 嵌入内容，模板标签也能获得正确的高亮。
+ */
+function configureLanguageServices(monaco: typeof MonacoNS) {
+  // Monaco 0.56 起把 TypeScript 服务移到了顶层 monaco.typescript。
+  // 旧的 monaco.languages.typescript 只保留类型声明，运行时为 undefined，
+  // 直接访问会导致任意文件的编辑器初始化失败。
+  const ts = monaco.typescript;
+  if (!ts?.typescriptDefaults || !ts?.javascriptDefaults) return;
+  const compilerOptions = {
+    allowJs: true,
+    allowNonTsExtensions: true,
+    checkJs: false,
+    jsx: ts.JsxEmit.ReactJSX,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeJs,
+    noEmit: true,
+    target: ts.ScriptTarget.ES2022,
+  };
+  const diagnosticsOptions = {
+    noSemanticValidation: false,
+    noSyntaxValidation: false,
+    noSuggestionDiagnostics: false,
+  };
+
+  ts.typescriptDefaults.setCompilerOptions(compilerOptions);
+  ts.typescriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
+  ts.javascriptDefaults.setCompilerOptions(compilerOptions);
+  ts.javascriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
+}
+
 /* ---------------------------------------------------------------- 启动 */
 
 async function boot(): Promise<typeof MonacoNS> {
@@ -260,6 +294,7 @@ async function boot(): Promise<typeof MonacoNS> {
   }
 
   defineThemes(monaco);
+  configureLanguageServices(monaco);
   return monaco;
 }
 
@@ -307,6 +342,8 @@ const EXT_ALIAS: Record<string, string> = {
   '.sh': '.shell',
   '.bash': '.shell',
   '.zsh': '.shell',
+  // Vue 单文件组件交给 HTML language mode，保留 template/script/style 嵌入高亮。
+  '.vue': '.html',
 };
 
 /** 依据文件名推断 Monaco 语言 id（拿不到就 plaintext） */

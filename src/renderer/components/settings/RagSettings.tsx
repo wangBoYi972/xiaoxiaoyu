@@ -13,10 +13,10 @@ import { useWorkspaceStore } from '../../stores/workspace-store';
 const { Text, Paragraph } = Typography;
 
 const BACKEND_OPTIONS = [
-  { value: 'auto', label: '自动（Ollama → 兼容端点 → 本地哈希）' },
+  { value: 'auto', label: '自动（Ollama → 兼容端点，不降级）' },
   { value: 'ollama', label: 'Ollama 本地模型' },
   { value: 'openai', label: 'OpenAI 兼容端点（中转 / 网关 / vLLM）' },
-  { value: 'local', label: '本地哈希向量（离线，无需模型）' },
+  { value: 'local', label: '关键词近似检索（离线，无需模型）' },
 ];
 
 export function RagSettings() {

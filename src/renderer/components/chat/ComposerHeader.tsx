@@ -5,8 +5,9 @@ import {
   BranchesOutlined,
   PlusOutlined,
   DatabaseOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
-import { message, Popover, Input, Button, Typography } from 'antd';
+import { message, Popover, Input, Button, Typography, Select, Tag, Tooltip } from 'antd';
 import { useWorkspaceStore } from '../../stores/workspace-store';
 import { useModelStore } from '../../stores/model-store';
 import { useRagStore } from '../../stores/rag-store';
@@ -73,7 +74,13 @@ export const ComposerHeader: React.FC<ComposerHeaderProps> = () => {
     }
   };
 
-  const isModelSelected = !!(activeModelId && availableModels.find((m) => m.id === activeModelId)?.displayName);
+  const activeProvider = providers.find((provider) => provider.id === activeProviderId);
+  const modelOptions = availableModels.map((model) => ({
+    value: model.id,
+    label: model.displayName,
+    searchLabel: `${model.displayName} ${model.id}`,
+    model,
+  }));
 
   return (
     <div className="chat-chips">
@@ -109,30 +116,61 @@ export const ComposerHeader: React.FC<ComposerHeaderProps> = () => {
       {/* 提供商 + 模型 */}
       <span className="g-chip chat-model-chip">
         <BranchesOutlined />
-        <select
-          className="chat-select"
+        <Select
+          className="chat-model-provider"
+          variant="borderless"
+          size="small"
+          popupClassName="chat-model-dropdown"
           value={activeProviderId}
-          onChange={(e) => setActiveProvider(e.target.value)}
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          onChange={setActiveProvider}
+          options={providers.map((provider) => ({
+            value: provider.id,
+            label: provider.name,
+            disabled: !provider.enabled && provider.id !== 'ollama',
+            title: provider.hasApiKey || provider.id === 'ollama' ? provider.name : `${provider.name}（未配置 API Key）`,
+          }))}
+          optionRender={(option) => {
+            const provider = providers.find((item) => item.id === option.value);
+            return (
+              <div className="chat-provider-option">
+                <span className="chat-provider-option-name">{String(option.label)}</span>
+                <span className={provider?.hasApiKey || provider?.id === 'ollama' ? 'chat-provider-status ready' : 'chat-provider-status'}>
+                  {provider?.hasApiKey || provider?.id === 'ollama' ? '已配置' : '未配置'}
+                </span>
+              </div>
+            );
+          }}
+        />
         <span className="chat-sep">·</span>
-        <select
-          className="chat-select"
-          value={activeModelId}
-          onChange={(e) => setActiveModel(e.target.value)}
-          style={{ color: isModelSelected ? 'var(--text-primary)' : 'var(--text-quaternary)' }}
-        >
-          {availableModels.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.displayName}
-            </option>
-          ))}
-        </select>
+        <Select
+          className="chat-model-select"
+          variant="borderless"
+          size="small"
+          showSearch
+          optionFilterProp="searchLabel"
+          popupClassName="chat-model-dropdown"
+          value={activeModelId || undefined}
+          placeholder="选择模型"
+          notFoundContent={activeProvider?.hasApiKey || activeProvider?.id === 'ollama' ? '未获取到模型' : '先配置 API Key'}
+          onChange={setActiveModel}
+          options={modelOptions}
+          optionRender={(option) => {
+            const model = (option.data as typeof modelOptions[number]).model;
+            return (
+              <div className="chat-model-option">
+                <span className="chat-model-option-main">
+                  <span className="chat-model-option-name">{model.displayName}</span>
+                  {model.displayName !== model.id && <span className="chat-model-option-id">{model.id}</span>}
+                </span>
+                <span className="chat-model-option-tags">
+                  {model.supportsTools ? <Tag>工具调用</Tag> : <Tag>仅问答</Tag>}
+                  {model.supportsVision && <Tag>视觉</Tag>}
+                  {model.supportsThinking && <Tag>推理</Tag>}
+                </span>
+              </div>
+            );
+          }}
+        />
 
         {/* 手填模型 ID：中转站/私有部署的模型不在预设列表里 */}
         <Popover
@@ -143,7 +181,7 @@ export const ComposerHeader: React.FC<ComposerHeaderProps> = () => {
           content={
             <div style={{ width: 260 }}>
               <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
-                给「{providers.find((p) => p.id === activeProviderId)?.name || activeProviderId}」加一个模型 ID
+                给「{activeProvider?.name || activeProviderId}」添加模型 ID
               </Text>
               <Input
                 size="small"
@@ -159,10 +197,22 @@ export const ComposerHeader: React.FC<ComposerHeaderProps> = () => {
             </div>
           }
         >
-          <button className="g-chip chat-model-add" title="手填模型 ID" type="button">
-            <PlusOutlined />
-          </button>
+          <Tooltip title="手动添加模型 ID">
+            <button className="g-chip chat-model-add" aria-label="手动添加模型 ID" type="button">
+              <PlusOutlined />
+            </button>
+          </Tooltip>
         </Popover>
+        <Tooltip title="打开模型设置">
+          <button
+            className="g-chip chat-model-add"
+            aria-label="打开模型设置"
+            type="button"
+            onClick={() => openSettingsTab('models')}
+          >
+            <SettingOutlined />
+          </button>
+        </Tooltip>
       </span>
     </div>
   );

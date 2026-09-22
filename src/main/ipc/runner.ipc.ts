@@ -47,17 +47,117 @@ interface DetectResult {
   label: string;
   files: string[];
   commands: ProjectCommand[];
+  startupClasses: JavaStartupClass[];
+}
+
+interface JavaStartupClass {
+  className: string;
+  filePath: string;
+  module?: string;
+  springBoot: boolean;
 }
 
 function hasSpringBoot(pomText: string): boolean {
-  return pomText.includes('spring-boot-maven-plugin');
+  return /spring-boot-maven-plugin|<groupId>org\.springframework\.boot<\/groupId>/i.test(pomText);
+}
+
+function parseMavenModules(pomText: string): string[] {
+  const moduleMatch = pomText.match(/<modules>([\s\S]*?)<\/modules>/i);
+  if (!moduleMatch) return [];
+  const modules: string[] = [];
+  const re = /<module>\s*([^<]+?)\s*<\/module>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(moduleMatch[1])) !== null) {
+    const value = match[1].trim();
+    if (value) modules.push(value);
+  }
+  return modules;
+}
+
+interface MavenModule {
+  path: string;
+  pomText: string;
+}
+
+/** 递归读取 Maven 模块，兼容 ruoyi-modules/ruoyi-order 这类多层聚合工程。 */
+async function findMavenModules(root: string): Promise<MavenModule[]> {
+  const modules: MavenModule[] = [];
+  const visited = new Set<string>();
+  const visit = async (relativePath: string): Promise<void> => {
+    const modulePath = path.resolve(root, relativePath);
+    const key = modulePath.toLowerCase();
+    if (visited.has(key)) return;
+    visited.add(key);
+    let pomText = '';
+    try { pomText = await fs.readFile(path.join(modulePath, 'pom.xml'), 'utf8'); } catch { return; }
+    const module = relativePath.replace(/\\/g, '/');
+    modules.push({ path: module || '.', pomText });
+    for (const child of parseMavenModules(pomText)) {
+      await visit(path.join(relativePath, child));
+    }
+  };
+  for (const child of parseMavenModules(await fs.readFile(path.join(root, 'pom.xml'), 'utf8'))) {
+    await visit(child);
+  }
+  return modules;
+}
+
+/** 扫描 Java 源码中的 Spring Boot / main 启动入口，限制范围避免扫到构建产物。 */
+async function findJavaStartupClasses(root: string, module?: string): Promise<JavaStartupClass[]> {
+  const results: JavaStartupClass[] = [];
+  const ignored = new Set(['node_modules', '.git', 'target', 'build', 'out', '.gradle']);
+  const visit = async (dir: string, depth: number): Promise<void> => {
+    if (depth > 10 || results.length >= 32) return;
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (results.length >= 32) return;
+      if (ignored.has(entry.name) || entry.name.startsWith('.')) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.java')) continue;
+      let source = '';
+      try {
+        const stat = await fs.stat(fullPath);
+        if (stat.size > 512 * 1024) continue;
+        source = await fs.readFile(fullPath, 'utf8');
+      } catch { continue; }
+      // 去掉注释和字符串，避免 README/注释中的 class 或 main 误触发。
+      const clean = source
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '')
+        .replace(/"(?:\\.|[^"\\])*"/g, '""')
+        .replace(/'(?:\\.|[^'\\])*'/g, "''");
+      const mainMatch = clean.match(/\bstatic\s+(?:final\s+)?void\s+main\s*\(\s*(?:final\s+)?String\s*(?:\[\]\s*[A-Za-z_$][\w$]*|[A-Za-z_$][\w$]*\s*\[\]|\.\.\.\s*[A-Za-z_$][\w$]*)/m);
+      if (!mainMatch) continue;
+      const declarations = [...clean.matchAll(/\b(?:public\s+|protected\s+|private\s+)?(?:abstract\s+|final\s+)?(?:class|record|enum)\s+([A-Za-z_$][\w$]*)/g)];
+      if (!declarations.length) continue;
+      const beforeMain = declarations.filter((entry) => (entry.index ?? 0) <= (mainMatch.index ?? 0));
+      const classMatch = beforeMain[beforeMain.length - 1] || declarations[0];
+      const packageName = source.match(/^\s*package\s+([\w.]+)\s*;/m)?.[1];
+      const declarationIndex = classMatch.index ?? 0;
+      const annotationWindow = clean.slice(Math.max(0, declarationIndex - 500), declarationIndex);
+      results.push({
+        className: packageName ? `${packageName}.${classMatch[1]}` : classMatch[1],
+        filePath: fullPath,
+        module,
+        springBoot: /@SpringBootApplication\b/.test(annotationWindow),
+      });
+    }
+  };
+  await visit(root, 0);
+  results.sort((a, b) => Number(b.springBoot) - Number(a.springBoot) || a.className.localeCompare(b.className));
+  return results;
 }
 
 async function detectProject(root: string): Promise<DetectResult> {
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
     const names = new Set(entries.filter((e) => e.isFile() || e.isDirectory()).map((e) => e.name));
-    const result: DetectResult = { kind: 'unknown', label: '未识别项目', files: [], commands: [] };
+    const result: DetectResult = { kind: 'unknown', label: '未识别项目', files: [], commands: [], startupClasses: [] };
 
     // Node.js
     if (names.has('package.json')) {
@@ -93,50 +193,78 @@ async function detectProject(root: string): Promise<DetectResult> {
       try {
         const pomText = await fs.readFile(path.join(root, 'pom.xml'), 'utf8');
         const packaging = pomText.match(/<packaging>([^<]+)<\/packaging>/)?.[1]?.trim() || 'jar';
-        const modules: string[] = [];
-        const moduleMatch = pomText.match(/<modules>([\s\S]*?)<\/modules>/);
-        if (moduleMatch) {
-          const re = /<module>([^<]+)<\/module>/g;
-          let m;
-          while ((m = re.exec(moduleMatch[1])) !== null) modules.push(m[1].trim());
-        }
+        const modules = parseMavenModules(pomText);
 
         if (packaging === 'pom' && modules.length > 0) {
-          result.label = `Maven 多模块项目（${modules.length} 个子模块）`;
+          const mavenModules = await findMavenModules(root);
+          result.label = `Java Maven 多模块项目（${mavenModules.length || modules.length} 个子模块）`;
           result.commands.push({
             id: 'mvn:parent-install',
             label: 'mvn -DskipTests clean install（父工程）',
             command: 'mvn -DskipTests clean install',
             cwd: root,
           });
-          for (const mod of modules) {
-            const modPath = path.join(root, mod);
-            let modPomText = '';
-            try { modPomText = await fs.readFile(path.join(modPath, 'pom.xml'), 'utf8'); } catch {}
-            const modHasSpring = hasSpringBoot(modPomText) || hasSpringBoot(pomText);
+          for (const mod of mavenModules) {
+            if (mod.path === '.') continue;
+            const modPath = path.join(root, mod.path);
+            // 聚合模块只负责继续列出子模块，避免把同一批源码重复归到父模块。
+            const entries = parseMavenModules(mod.pomText).length > 0
+              ? []
+              : await findJavaStartupClasses(modPath, mod.path);
+            result.startupClasses.push(...entries);
+            const bootEntries = entries.filter((entry) => entry.springBoot);
+            const modHasSpring = hasSpringBoot(mod.pomText) || bootEntries.length > 0;
             result.commands.push({
-              id: `mvn:${mod}:install`,
-              label: `${mod}: mvn -DskipTests clean install`,
-              command: `mvn -pl ${mod} -am -DskipTests clean install`,
+              id: `mvn:${mod.path}:install`,
+              label: `${mod.path}: mvn -DskipTests clean install`,
+              command: `mvn -pl ${mod.path} -am -DskipTests clean install`,
               cwd: root,
             });
             if (modHasSpring) {
-              result.commands.push({
-                id: `mvn:${mod}:run`,
-                label: `${mod}: mvn -DskipTests spring-boot:run`,
-                command: `mvn -pl ${mod} -am -DskipTests spring-boot:run`,
-                cwd: root,
-              });
+              if (bootEntries.length) {
+                for (const entry of bootEntries) {
+                  result.commands.push({
+                    id: `mvn:${mod.path}:run:${entry.className}`,
+                    label: `${mod.path}: 启动 ${entry.className}`,
+                    command: `mvn -pl ${mod.path} -am -DskipTests spring-boot:run -Dspring-boot.run.main-class=${entry.className}`,
+                    cwd: root,
+                    description: entry.filePath,
+                  });
+                }
+              } else if (hasSpringBoot(mod.pomText)) {
+                result.commands.push({
+                  id: `mvn:${mod.path}:run`,
+                  label: `${mod.path}: mvn -DskipTests spring-boot:run`,
+                  command: `mvn -pl ${mod.path} -am -DskipTests spring-boot:run`,
+                  cwd: root,
+                });
+              }
             }
           }
         } else {
-          result.label = 'Maven 项目';
+          result.label = 'Java Maven 项目';
           const spring = hasSpringBoot(pomText);
+          result.startupClasses = await findJavaStartupClasses(root);
+          if (spring) result.label = 'Spring Boot Maven 项目';
           result.commands.push({ id: 'mvn:install', label: 'mvn -DskipTests clean install', command: 'mvn -DskipTests clean install', cwd: root });
           result.commands.push({ id: 'mvn:package', label: 'mvn -DskipTests package', command: 'mvn -DskipTests package', cwd: root });
           result.commands.push({ id: 'mvn:compile', label: 'mvn -DskipTests compile', command: 'mvn -DskipTests compile', cwd: root });
           if (spring) {
-            result.commands.unshift({ id: 'mvn:run', label: 'mvn -DskipTests spring-boot:run', command: 'mvn -DskipTests spring-boot:run', cwd: root });
+            const bootEntries = result.startupClasses.filter((entry) => entry.springBoot);
+            if (bootEntries.length) {
+              for (let i = bootEntries.length - 1; i >= 0; i--) {
+                const entry = bootEntries[i];
+                result.commands.unshift({
+                  id: `mvn:run:${entry.className}`,
+                  label: `启动 ${entry.className}`,
+                  command: `mvn -DskipTests spring-boot:run -Dspring-boot.run.main-class=${entry.className}`,
+                  cwd: root,
+                  description: entry.filePath,
+                });
+              }
+            } else {
+              result.commands.unshift({ id: 'mvn:run', label: 'mvn -DskipTests spring-boot:run', command: 'mvn -DskipTests spring-boot:run', cwd: root });
+            }
           }
         }
       } catch { /* ignore */ }
@@ -145,10 +273,19 @@ async function detectProject(root: string): Promise<DetectResult> {
     // Gradle
     if (names.has('build.gradle') || names.has('build.gradle.kts')) {
       result.kind = 'gradle';
-      result.label = 'Gradle 项目';
+      result.label = 'Java Gradle 项目';
       result.files.push(names.has('build.gradle') ? 'build.gradle' : 'build.gradle.kts');
+      result.startupClasses = await findJavaStartupClasses(root);
       const gradle = names.has('gradlew') ? (process.platform === 'win32' ? 'gradlew' : './gradlew') : 'gradle';
-      result.commands.push({ id: 'gradle:run', label: `${gradle} bootRun`, command: `${gradle} bootRun`, cwd: root });
+      const bootEntries = result.startupClasses.filter((entry) => entry.springBoot);
+      if (bootEntries.length === 1) {
+        const entry = bootEntries[0];
+        result.commands.push({ id: 'gradle:run', label: `启动 ${entry.className}`, command: `${gradle} bootRun`, cwd: root, description: entry.filePath });
+      } else if (bootEntries.length > 1) {
+        result.commands.push({ id: 'gradle:run', label: `${gradle} bootRun（检测到 ${bootEntries.length} 个启动类）`, command: `${gradle} bootRun`, cwd: root, description: 'Gradle 多启动类项目请在 build.gradle 中配置 bootRun.mainClass' });
+      } else {
+        result.commands.push({ id: 'gradle:run', label: `${gradle} bootRun`, command: `${gradle} bootRun`, cwd: root });
+      }
       result.commands.push({ id: 'gradle:build', label: `${gradle} build`, command: `${gradle} build`, cwd: root });
     }
 
@@ -191,7 +328,7 @@ async function detectProject(root: string): Promise<DetectResult> {
     return result;
   } catch (err: any) {
     logger.warn(`[runner] detect 失败: ${root} - ${err.message}`);
-    return { kind: 'unknown', label: '读取目录失败', files: [], commands: [] };
+    return { kind: 'unknown', label: '读取目录失败', files: [], commands: [], startupClasses: [] };
   }
 }
 
